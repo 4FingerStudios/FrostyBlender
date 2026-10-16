@@ -6,6 +6,7 @@
     python bridge.py cosmetics-discover --tools TOOLS --game GAME --out cosmetics.json
     python bridge.py props-discover --tools TOOLS --game GAME --out props.json  (props-import as cosmetics-import)
     python bridge.py npcs-discover --tools TOOLS --game GAME --out npcs.json  (npcs-import as cosmetics-import)
+    python bridge.py icons --tools TOOLS --reader READER --game GAME --items REQUESTS.json --icons-dir DIR --out result.json
     python bridge.py animations-discover --tools TOOLS --game GAME --out clips.json
     python bridge.py animations-import --tools TOOLS --game GAME --items ITEMS.json --job JOB
     python bridge.py cosmetics-import --tools TOOLS --reader READER --game GAME --items ITEMS.json
@@ -85,6 +86,14 @@ def npcs_discover(args):
     sys.path.insert(0, str(args.tools))
     import npcs
     write_json(args.out, dict(npcs.discover(args.game), ok=True))
+
+
+def icons(args):
+    """Game UI icons for characters, NPCs and cosmetics, as PNGs (see tools/icons.py)."""
+    sys.path.insert(0, str(args.tools))
+    import icons as tool
+    requests = json.loads(args.items.read_text(encoding='utf-8'))
+    write_json(args.out, dict(tool.run(args.game, requests, args.reader, args.icons_dir), ok=True))
 
 
 def animations_discover(args):
@@ -191,7 +200,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('action', choices=('discover', 'import', 'cosmetics-discover', 'cosmetics-import',
                                       'props-discover', 'props-import', 'animations-discover', 'animations-import',
-                                      'npcs-discover', 'npcs-import'))
+                                      'npcs-discover', 'npcs-import', 'icons'))
     p.add_argument('--tools', type=Path, required=True)
     p.add_argument('--game', type=Path, required=True)
     p.add_argument('--out', type=Path)
@@ -203,11 +212,12 @@ def main():
     p.add_argument('--keep', action='store_true')
     p.add_argument('--bfn-types', type=Path, help='Battle for Neighborville type name table (frosty_types.ps1)')
     p.add_argument('--items', type=Path, help='cosmetics-import: JSON list of items from cosmetics-discover')
+    p.add_argument('--icons-dir', type=Path, help='icons: folder for the PNGs')
     args = p.parse_args()
-    if args.action.endswith('discover'):
+    if args.action.endswith('discover') or args.action == 'icons':
         try:
             {'discover': discover, 'cosmetics-discover': cosmetics_discover, 'props-discover': props_discover,
-             'animations-discover': animations_discover, 'npcs-discover': npcs_discover}[args.action](args)
+             'animations-discover': animations_discover, 'npcs-discover': npcs_discover, 'icons': icons}[args.action](args)
         except Exception as error:
             write_json(args.out, {'ok': False, 'error': str(error)})
             return 1

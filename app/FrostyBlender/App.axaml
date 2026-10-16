@@ -1,0 +1,238 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="FrostyBlender.App"
+             RequestedThemeVariant="Dark">
+  <Application.Resources>
+    <!-- Calm charcoal surfaces with a garden accent pair: leaf green (actions) and sunflower (highlights). -->
+    <SolidColorBrush x:Key="Bg">#111214</SolidColorBrush>
+    <SolidColorBrush x:Key="Panel">#17181C</SolidColorBrush>
+    <SolidColorBrush x:Key="Card">#1E2025</SolidColorBrush>
+    <SolidColorBrush x:Key="CardHover">#252830</SolidColorBrush>
+    <SolidColorBrush x:Key="Raised">#2A2D35</SolidColorBrush>
+    <SolidColorBrush x:Key="Line">#262930</SolidColorBrush>
+    <SolidColorBrush x:Key="LineStrong">#343843</SolidColorBrush>
+    <SolidColorBrush x:Key="Text">#ECEEF2</SolidColorBrush>
+    <SolidColorBrush x:Key="Muted">#8B919D</SolidColorBrush>
+    <SolidColorBrush x:Key="Faint">#5D636F</SolidColorBrush>
+    <SolidColorBrush x:Key="Accent">#7CC84F</SolidColorBrush>
+    <SolidColorBrush x:Key="AccentSoft">#1F2B1B</SolidColorBrush>
+    <SolidColorBrush x:Key="Sun">#F4C542</SolidColorBrush>
+    <SolidColorBrush x:Key="Zombie">#A08BD6</SolidColorBrush>
+    <SolidColorBrush x:Key="Danger">#E57373</SolidColorBrush>
+    <LinearGradientBrush x:Key="BrandGradient" StartPoint="0%,0%" EndPoint="100%,100%">
+      <GradientStop Color="#2E4A26" Offset="0" />
+      <GradientStop Color="#173A3A" Offset="1" />
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="SendGradient" StartPoint="0%,0%" EndPoint="100%,0%">
+      <GradientStop Color="#8BD35C" Offset="0" />
+      <GradientStop Color="#5DB04A" Offset="1" />
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="TileShade" StartPoint="0%,55%" EndPoint="0%,100%">
+      <GradientStop Color="#00000000" Offset="0" />
+      <GradientStop Color="#66000000" Offset="1" />
+    </LinearGradientBrush>
+  </Application.Resources>
+  <Application.Styles>
+    <FluentTheme>
+      <FluentTheme.Palettes>
+        <ColorPaletteResources x:Key="Dark" Accent="#7CC84F" RegionColor="#111214" />
+      </FluentTheme.Palettes>
+    </FluentTheme>
+
+    <Style Selector="Window">
+      <Setter Property="Background" Value="{StaticResource Bg}" />
+      <Setter Property="Foreground" Value="{StaticResource Text}" />
+    </Style>
+
+    <!-- type -->
+    <Style Selector="TextBlock.h1">
+      <Setter Property="FontSize" Value="26" />
+      <Setter Property="FontWeight" Value="Bold" />
+      <Setter Property="LetterSpacing" Value="-0.4" />
+    </Style>
+    <Style Selector="TextBlock.h2">
+      <Setter Property="FontSize" Value="18" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.eyebrow">
+      <Setter Property="FontSize" Value="10.5" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="LetterSpacing" Value="1.6" />
+      <Setter Property="Foreground" Value="{StaticResource Faint}" />
+    </Style>
+    <Style Selector="TextBlock.muted">
+      <Setter Property="Foreground" Value="{StaticResource Muted}" />
+    </Style>
+    <Style Selector="TextBlock.icon">
+      <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
+    </Style>
+
+    <!-- surfaces -->
+    <Style Selector="Border.card">
+      <Setter Property="Background" Value="{StaticResource Card}" />
+      <Setter Property="BorderBrush" Value="{StaticResource Line}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="14" />
+      <Setter Property="Padding" Value="22" />
+    </Style>
+    <Style Selector="Border.chip">
+      <Setter Property="Background" Value="{StaticResource Raised}" />
+      <Setter Property="CornerRadius" Value="20" />
+      <Setter Property="Padding" Value="9,2" />
+    </Style>
+
+    <!-- buttons -->
+    <Style Selector="Button">
+      <Setter Property="CornerRadius" Value="9" />
+    </Style>
+    <Style Selector="Button.accent">
+      <Setter Property="Foreground" Value="#0D1A08" />
+      <Setter Property="FontWeight" Value="Bold" />
+      <Setter Property="CornerRadius" Value="11" />
+    </Style>
+    <Style Selector="Button.accent /template/ ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource SendGradient}" />
+      <Setter Property="Foreground" Value="#0D1A08" />
+    </Style>
+    <Style Selector="Button.accent:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#97DE68" />
+      <Setter Property="Foreground" Value="#0D1A08" />
+    </Style>
+    <Style Selector="Button.accent:pressed /template/ ContentPresenter">
+      <Setter Property="Background" Value="#6BBF4B" />
+    </Style>
+    <Style Selector="Button.accent:disabled /template/ ContentPresenter">
+      <Setter Property="Background" Value="#2C3828" />
+      <Setter Property="Foreground" Value="#6E7E68" />
+    </Style>
+    <Style Selector="Button.ghost">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="{StaticResource Muted}" />
+    </Style>
+    <Style Selector="Button.ghost:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource Raised}" />
+      <Setter Property="Foreground" Value="{StaticResource Text}" />
+    </Style>
+    <Style Selector="Button.link">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Padding" Value="10,8" />
+      <Setter Property="HorizontalContentAlignment" Value="Left" />
+    </Style>
+    <Style Selector="Button.link:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource Raised}" />
+    </Style>
+
+    <!-- inputs -->
+    <Style Selector="TextBox">
+      <Setter Property="CornerRadius" Value="10" />
+      <Setter Property="Background" Value="{StaticResource Card}" />
+      <Setter Property="BorderBrush" Value="{StaticResource LineStrong}" />
+      <Setter Property="MinHeight" Value="36" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="ComboBox">
+      <Setter Property="CornerRadius" Value="9" />
+    </Style>
+
+    <!-- sidebar navigation -->
+    <Style Selector="ListBox.nav">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="ListBox.nav ListBoxItem">
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Margin" Value="10,2" />
+      <Setter Property="CornerRadius" Value="10" />
+      <Setter Property="Foreground" Value="{StaticResource Muted}" />
+    </Style>
+    <Style Selector="ListBox.nav ListBoxItem:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource Card}" />
+    </Style>
+    <Style Selector="ListBox.nav ListBoxItem:selected /template/ ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource AccentSoft}" />
+    </Style>
+    <Style Selector="ListBox.nav ListBoxItem:selected">
+      <Setter Property="Foreground" Value="{StaticResource Text}" />
+    </Style>
+    <Style Selector="ListBox.nav ListBoxItem Border.marker">
+      <Setter Property="Opacity" Value="0" />
+    </Style>
+    <Style Selector="ListBox.nav ListBoxItem:selected Border.marker">
+      <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="ListBox.nav ListBoxItem:selected TextBlock.icon">
+      <Setter Property="Foreground" Value="{StaticResource Accent}" />
+    </Style>
+
+    <!-- game switch -->
+    <Style Selector="ListBox.pills">
+      <Setter Property="Background" Value="{StaticResource Card}" />
+      <Setter Property="BorderBrush" Value="{StaticResource Line}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="12" />
+      <Setter Property="Padding" Value="3" />
+    </Style>
+    <Style Selector="ListBox.pills ListBoxItem">
+      <Setter Property="CornerRadius" Value="9" />
+      <Setter Property="Padding" Value="16,6" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="{StaticResource Muted}" />
+    </Style>
+    <Style Selector="ListBox.pills ListBoxItem:selected /template/ ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource Accent}" />
+    </Style>
+    <Style Selector="ListBox.pills ListBoxItem:selected">
+      <Setter Property="Foreground" Value="#0D1A08" />
+    </Style>
+
+    <!-- tiles: a little hop on hover -->
+    <Style Selector="ListBox.tiles">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="ListBox.tiles ListBoxItem">
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Margin" Value="7" />
+      <Setter Property="CornerRadius" Value="14" />
+      <Setter Property="Background" Value="{StaticResource Card}" />
+      <Setter Property="BorderBrush" Value="{StaticResource Line}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="RenderTransform" Value="translateY(0px)" />
+      <Setter Property="Transitions">
+        <Transitions>
+          <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.14" Easing="CubicEaseOut" />
+        </Transitions>
+      </Setter>
+    </Style>
+    <Style Selector="ListBox.tiles ListBoxItem:pointerover">
+      <Setter Property="RenderTransform" Value="translateY(-4px)" />
+    </Style>
+    <Style Selector="ListBox.tiles ListBoxItem:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource CardHover}" />
+      <Setter Property="BorderBrush" Value="{StaticResource LineStrong}" />
+    </Style>
+    <Style Selector="ListBox.tiles ListBoxItem:selected /template/ ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource AccentSoft}" />
+      <Setter Property="BorderBrush" Value="{StaticResource Accent}" />
+      <Setter Property="BorderThickness" Value="2" />
+    </Style>
+
+    <!-- item rows -->
+    <Style Selector="ListBox.rows">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="ListBox.rows ListBoxItem">
+      <Setter Property="Padding" Value="6,0" />
+      <Setter Property="MinHeight" Value="30" />
+      <Setter Property="CornerRadius" Value="8" />
+    </Style>
+    <Style Selector="ListBox.rows ListBoxItem:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource Card}" />
+    </Style>
+    <Style Selector="ListBox.rows ListBoxItem:selected /template/ ContentPresenter">
+      <Setter Property="Background" Value="{StaticResource Card}" />
+    </Style>
+
+    <Style Selector="ProgressBar">
+      <Setter Property="Foreground" Value="{StaticResource Accent}" />
+    </Style>
+  </Application.Styles>
+</Application>

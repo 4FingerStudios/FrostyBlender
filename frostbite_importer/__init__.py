@@ -115,6 +115,10 @@ class FrostbitePreferences(bpy.types.AddonPreferences):
     frosty: StringProperty(name='Frosty Editor folder', subtype='DIR_PATH',
                            description='Folder holding FrostySdk.dll and Profiles/PVZ3SDK.dll')
     show_advanced: BoolProperty(name='Advanced', description='Show the tool paths')
+    app_link: BoolProperty(name='Link to the FrostyBlender app', default=True, update=lambda self, context: _apply_link(),
+                           description='Let the FrostyBlender desktop app send imports to this Blender (this PC only)')
+    app_port: IntProperty(name='Port', default=24567, min=1024, max=65535, update=lambda self, context: _apply_link(restart=True),
+                          description='Local port the app connects to')
     gw1_path: StringProperty(name='Garden Warfare 1', subtype='DIR_PATH', default=default_game(GAMES['gw1_path']),
                              description='Installed Plants vs. Zombies: Garden Warfare folder (holds PVZ.Main_Win64_Retail.exe)')
     gw2_path: StringProperty(name='Garden Warfare 2', subtype='DIR_PATH', default=default_game(GAMES['gw2_path']),
@@ -142,6 +146,13 @@ class FrostbitePreferences(bpy.types.AddonPreferences):
             row = box.row(align=True)
             row.prop(self, name)
             row.label(text='', icon='CHECKMARK' if ok else 'ERROR')
+        box = self.layout.box()
+        row = box.row(align=True)
+        row.prop(self, 'app_link')
+        row.prop(self, 'app_port')
+        if self.app_link:
+            box.label(text='App linked' if app_link.running() else 'App link off: port busy (another Blender?)',
+                      icon='LINKED' if app_link.running() else 'ERROR')
         box = self.layout.box()
         box.label(text='Battle for Neighborville', icon='WORLD')
         box.prop(self, 'bfn_key')
@@ -538,7 +549,20 @@ classes = (FrostbitePreferences, FrostbiteMap, FrostbiteState, FROSTBITE_OT_buil
 
 
 # The Customizations tab uses the helpers above, so it is imported after them.
-from . import animation_import, animations_ui, cosmetics_ui, npcs_ui, props_ui  # noqa: E402
+from . import animation_import, animations_ui, app_link, cosmetics_ui, npcs_ui, props_ui  # noqa: E402
+
+
+def _apply_link(restart=False):
+    """Start or stop the app link to match the preferences."""
+    try:
+        p = bpy.context.preferences.addons[__package__].preferences
+    except KeyError:
+        return 1.0  # preferences not there yet; try again
+    if restart or not p.app_link:
+        app_link.stop()
+    if p.app_link:
+        app_link.start(p.app_port)
+    return None
 
 
 def register():
@@ -550,9 +574,11 @@ def register():
     npcs_ui.register()
     props_ui.register()
     animations_ui.register()
+    bpy.app.timers.register(_apply_link, first_interval=1.0)
 
 
 def unregister():
+    app_link.stop()
     animations_ui.unregister()
     props_ui.unregister()
     npcs_ui.unregister()

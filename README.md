@@ -48,6 +48,18 @@ Tips:
 - **Texture size** (in the tabs) trades quality for speed. 1024 is a good default; 512 helps on low-memory PCs.
 - Converted files are kept in **Documents\Frostbite Blender**, so you can delete old imports there to free space.
 
+## FrostyBlender app
+
+A desktop app for browsing everything in the games, in the style of Fortnite Porting. Pick **Maps**, **Characters**, **NPCs**, **Props** or **Animations**, choose GW1 / GW2 / BFN, click a tile, tick what you want and press **Send to Blender**.
+
+1. Install the add-on (above) and open Blender once. The add-on tells the app where Blender, its tools and your game folders are.
+2. Download `FrostyBlender-…-windows-x64.exe` and run it. Nothing else to install.
+3. Keep Blender open while you send imports. The status bar shows when Blender is connected.
+
+Maps and props show each map's loading screen, so you can see what you're porting. Characters, NPCs and animated characters show the games' own menu art: hero portraits, boss heads, turret cards and the icon of each cosmetic. Icons are made the first time you open a game or character (a few seconds) and kept, so they show instantly after that. Items the game has no art for keep a plain row.
+
+Browsing works even when Blender is closed. Imports run in Blender exactly as if you'd pressed Import in the add-on's tab. The add-on only listens on this PC (`127.0.0.1`, port 24567), and you can turn the link off in its preferences under **Link to the FrostyBlender app**.
+
 ## Troubleshooting
 
 - **"Set the … game folder"**: set that game's folder in the add-on preferences (the folder with the game's `.exe`).
@@ -62,11 +74,12 @@ Most people should download the ready-made zip from the **Releases** page. To bu
 python build.py --blender "C:\Program Files\Blender Foundation\Blender 4.2\blender.exe"
 ```
 
-This writes `dist/frostbite_importer-<version>-windows-x64.zip`.
+This writes `dist/frostbite_importer-<version>-windows-x64.zip`, and, if the .NET 8 SDK is installed, `dist/FrostyBlender-<version>-windows-x64.exe` (skip it with `--no-app`).
 
 | Folder | What's in it |
 | --- | --- |
-| `frostbite_importer/` | The Blender add-on (tabs, importer, rigging, animation) |
+| `frostbite_importer/` | The Blender add-on (tabs, importer, rigging, animation, app link) |
+| `app/FrostyBlender/` | The FrostyBlender desktop app (C#, Avalonia, .NET 8) |
 | `tools/` | The import tools that read the game archives. They run on Blender's Python. |
 | `reader/` | C++ texture reader (`aura_frostbite_reader.exe`), using GPL code from [ReSkate](https://github.com/Dingo-Shenanigans/ReSkate) |
 | `data/` | BFN class and field name table |

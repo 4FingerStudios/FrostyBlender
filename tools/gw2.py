@@ -432,11 +432,14 @@ def complete_dependencies(game, output, inventory):
                  for a in inventory['assets'] if 'document' in a]
     follow = {'WorldPartData', 'ObjectBlueprint', 'SpatialPrefabBlueprint', 'LogicPrefabBlueprint', 'SubWorldData',
               'RigidMeshAsset', 'CompositeMeshAsset', 'MeshVariationDatabase', 'TextureAsset', 'TerrainData'}
-    if not any(ref['file'] not in existing for asset, doc in documents
-               if doc['root_type'] in follow for ref in doc['imports']):
+    resources = {a['resource_id'] for a in inventory['assets'] if a['kind'] == 'resource'}
+    # Texture assets import nothing, so a missing resource also needs the index.
+    missing = any(doc['root_type'] == 'TextureAsset' and (doc['objects'][0].get('Resource') or {}).get('$resource') not in resources
+                  for asset, doc in documents if doc['objects'])
+    if not missing and not any(ref['file'] not in existing for asset, doc in documents
+                               if doc['root_type'] in follow for ref in doc['imports']):
         return
     indexes = cached_dependency_index(game)
-    resources = {a['resource_id'] for a in inventory['assets'] if a['kind'] == 'resource'}
     chunks = {a['guid'] for a in inventory['assets'] if a['kind'] == 'chunk'}
     def obtain(kind, key):
         location = indexes[kind].get(key)
@@ -746,6 +749,30 @@ def complete_texture_chunks(game, output, inventory, terrain_only=False):
         item['bytes'] = item['original_size'] = len(content)
         item['streaming_source'] = str(source)
     print('GW2 complete streaming chunks:', len(wanted & index.keys()), flush=True)
+    # Chunks of shared textures (and props) pulled in as dependencies are kept in bundles, not
+    # streaming superbundles: take them from the dependency index.
+    missing = sorted(g for g in wanted - index.keys() if 'bytes' not in chunks.get(g, {}))
+    if missing:
+        shared = cached_dependency_index(game)['chunk']
+        found = 0
+        for guid in missing:
+            location = shared.get(guid)
+            if location is None:
+                continue
+            path, offset, size, source = location
+            with path.open('rb') as stream:
+                stream.seek(offset)
+                content = decompress(Reader(stream.read(size)), source['original_size'])
+            item = chunks.get(guid)
+            if item is None:
+                item = chunks[guid] = {'kind': 'chunk', 'name': guid, 'guid': guid, 'path': f'chunk/{guid}.bin'}
+                inventory['assets'].append(item)
+            target = Path(output) / item['path']
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            item['bytes'] = item['original_size'] = len(content)
+            found += 1
+        print('GW2 bundle chunks from the shared index:', found, flush=True)
 
 
 if __name__ == '__main__':

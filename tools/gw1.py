@@ -114,7 +114,7 @@ def finish(game, output, inventory):
             content = gw2.decompress(gw2.Reader(data), stream_size(data))
         else:
             if not shared:
-                shared.update(gw2.dependency_index(game))
+                shared.update(gw2.cached_dependency_index(game))
             location = shared['chunk'].get(guid)
             if location is None:
                 raise ValueError('GW1 chunk %s is in no TOC or bundle' % guid)
@@ -180,9 +180,13 @@ def finish(game, output, inventory):
         item = chunks.get(guid)
         full = sum(struct.unpack_from('<15I', header, 44)[:min(header[26], 15)])
         try:
-            if (item is None or item.get('bytes') != full) and guid in index:
-                item = fetch(guid)
-                fetched += 1
+            if item is None or item.get('bytes') != full:
+                try:  # streaming TOCs first, then any bundle (menu art lives only in bundles)
+                    item = fetch(guid)
+                    fetched += 1
+                except ValueError:
+                    if item is None:
+                        raise
             if item is None or 'bytes' not in item:
                 raise ValueError('GW1 texture chunk unavailable')
             # The original header stays in place, so the fix-up can run again on the same export.

@@ -1,0 +1,355 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:FrostyBlender.ViewModels"
+        x:Class="FrostyBlender.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Title="FrostyBlender"
+        Icon="/Assets/icon.ico"
+        Width="1380" Height="860" MinWidth="1060" MinHeight="640"
+        WindowStartupLocation="CenterScreen"
+        ExtendClientAreaToDecorationsHint="True"
+        ExtendClientAreaTitleBarHeightHint="36">
+  <Grid ColumnDefinitions="252,*" RowDefinitions="36,*,32">
+    <Border Grid.Row="0" Grid.Column="1" Background="{StaticResource Bg}" IsHitTestVisible="False" />
+
+    <!-- ================= sidebar ================= -->
+    <Border Grid.Column="0" Grid.Row="0" Grid.RowSpan="2" Background="{StaticResource Panel}"
+            BorderBrush="{StaticResource Line}" BorderThickness="0,0,1,0">
+      <DockPanel>
+        <!-- brand -->
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" Margin="18,10,16,22">
+          <Border Width="54" Height="54" CornerRadius="16" Background="{StaticResource BrandGradient}"
+                  BorderBrush="#3A5A30" BorderThickness="1" BoxShadow="0 6 18 0 #55000000">
+            <Image Source="/Assets/icon.png" Width="46" Height="46" />
+          </Border>
+          <StackPanel Grid.Column="1" Margin="12,2,0,0" VerticalAlignment="Center" Spacing="1">
+            <TextBlock FontSize="19" FontWeight="Bold" LetterSpacing="-0.3">
+              <Run Text="Frosty" /><Run Text="Blender" Foreground="{StaticResource Accent}" />
+            </TextBlock>
+            <TextBlock Classes="eyebrow" Text="PVZ TO BLENDER" FontSize="9" />
+          </StackPanel>
+        </Grid>
+
+        <!-- footer -->
+        <StackPanel DockPanel.Dock="Bottom" Margin="14,8,14,16" Spacing="4">
+          <Button Classes="link" HorizontalAlignment="Stretch" Command="{Binding OpenCommand}" CommandParameter="https://discord.gg/Vh7cgGzUyB">
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <Border Width="22" Height="22" CornerRadius="6" Background="#5865F2">
+                <TextBlock Classes="icon" Text="&#xE8BD;" FontSize="12" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+              </Border>
+              <TextBlock Text="Join the Discord" VerticalAlignment="Center" FontWeight="SemiBold" />
+            </StackPanel>
+          </Button>
+          <Button Classes="link" HorizontalAlignment="Stretch" Command="{Binding OpenCommand}" CommandParameter="https://github.com/4FingerStudios/FrostyBlender">
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <Border Width="22" Height="22" CornerRadius="6" Background="{StaticResource Raised}">
+                <TextBlock Classes="icon" Text="&#xE943;" FontSize="11" HorizontalAlignment="Center" VerticalAlignment="Center" />
+              </Border>
+              <TextBlock Text="Source on GitHub" VerticalAlignment="Center" Classes="muted" />
+            </StackPanel>
+          </Button>
+          <Border Height="1" Background="{StaticResource Line}" Margin="4,10,4,8" />
+          <TextBlock Classes="eyebrow" Margin="10,0" FontSize="9">
+            <Run Text="4FINGERSTUDIOS  ·  V" /><Run Text="{Binding AppVersion}" />
+          </TextBlock>
+        </StackPanel>
+
+        <!-- navigation -->
+        <StackPanel>
+          <TextBlock Classes="eyebrow" Text="LIBRARY" Margin="24,0,0,8" />
+          <ListBox Classes="nav" ItemsSource="{Binding Nav}" SelectedItem="{Binding SelectedNav}">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:NavItem">
+                <Grid ColumnDefinitions="3,Auto,*" Height="40">
+                  <Border Classes="marker" Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="1" Classes="icon" Text="{Binding Glyph}" FontSize="16" Width="22" Margin="12,0,12,0"
+                             TextAlignment="Center" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="2" Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <!-- ================= browser ================= -->
+    <Grid Grid.Column="1" Grid.Row="1" ColumnDefinitions="*,400" IsVisible="{Binding IsBrowser}">
+      <DockPanel Grid.Column="0" Margin="26,4,12,0">
+        <!-- section header -->
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" Margin="6,0,6,18">
+          <StackPanel Grid.Row="0" Spacing="3">
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Classes="h1" Text="{Binding SectionTitle}" />
+              <Border Classes="chip" VerticalAlignment="Center" Margin="0,4,0,0"
+                      IsVisible="{Binding CountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <TextBlock Text="{Binding CountText}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource Muted}" />
+              </Border>
+            </StackPanel>
+            <TextBlock Classes="muted" FontSize="13" Text="{Binding SectionBlurb}" />
+          </StackPanel>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+            <ListBox Classes="pills" ItemsSource="{Binding Games}" SelectedItem="{Binding Game}">
+              <ListBox.ItemsPanel>
+                <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+              </ListBox.ItemsPanel>
+            </ListBox>
+            <Button Classes="ghost" Width="38" Height="38" ToolTip.Tip="Scan the game again" Command="{Binding RefreshCommand}">
+              <TextBlock Classes="icon" Text="&#xE72C;" FontSize="14" HorizontalAlignment="Center" />
+            </Button>
+          </StackPanel>
+          <Grid Grid.Row="1" Grid.ColumnSpan="2" Margin="0,14,0,0" MaxWidth="560" HorizontalAlignment="Left">
+            <TextBox Watermark="Search by name…" Text="{Binding Search}" Padding="36,0,10,0" Width="560" />
+            <TextBlock Classes="icon" Text="&#xE721;" FontSize="13" Foreground="{StaticResource Faint}"
+                       Margin="13,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False" />
+          </Grid>
+        </Grid>
+
+        <Panel>
+          <ListBox Classes="tiles" ItemsSource="{Binding Entries}" SelectedItem="{Binding SelectedEntry}"
+                   ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.ItemsPanel>
+              <ItemsPanelTemplate><WrapPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+            </ListBox.ItemsPanel>
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:Entry">
+                <StackPanel Width="{Binding TileWidth}" Margin="7">
+                  <Border Height="{Binding ImageHeight}" CornerRadius="10" Background="{Binding Accent}" ClipToBounds="True">
+                    <Panel>
+                      <TextBlock Text="{Binding Initials}" FontSize="38" FontWeight="Black" Foreground="#D9FFFFFF"
+                                 HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding NoIcon}" />
+                      <Image Source="{Binding Icon}" Stretch="UniformToFill" IsVisible="{Binding HasIcon}" />
+                      <Border Background="{StaticResource TileShade}" IsHitTestVisible="False" />
+                      <Border Background="#B3111214" CornerRadius="7" Padding="7,2" Margin="7"
+                              HorizontalAlignment="Left" VerticalAlignment="Top"
+                              IsVisible="{Binding Badge, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                        <TextBlock Text="{Binding Badge}" FontSize="10" FontWeight="SemiBold" Foreground="#E6ECEEF2" />
+                      </Border>
+                    </Panel>
+                  </Border>
+                  <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13.5" Margin="3,10,3,0" TextTrimming="CharacterEllipsis" />
+                  <TextBlock Text="{Binding Subtitle}" Classes="muted" FontSize="11.5" Margin="3,2,3,2" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+
+          <Border Classes="card" IsVisible="{Binding Scanning}" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="28,24">
+            <StackPanel Spacing="12" Width="300">
+              <TextBlock Classes="eyebrow" Text="SCANNING" HorizontalAlignment="Center" Foreground="{StaticResource Sun}" />
+              <TextBlock Text="{Binding ScanMessage}" HorizontalAlignment="Center" FontWeight="SemiBold" />
+              <ProgressBar IsIndeterminate="True" />
+              <TextBlock Text="Digging through the game files. The first scan can take up to a minute."
+                         HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Classes="muted" FontSize="12" />
+            </StackPanel>
+          </Border>
+
+          <Border Classes="card" IsVisible="{Binding HasError}" MaxWidth="520" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="26">
+            <StackPanel Spacing="12">
+              <TextBlock Classes="eyebrow" Text="NOT READY YET" Foreground="{StaticResource Sun}" />
+              <TextBlock Classes="h2" Text="This list can't load yet" />
+              <TextBlock Text="{Binding Error}" TextWrapping="Wrap" Classes="muted" />
+              <Button Classes="accent" Content="Try again" HorizontalAlignment="Left" Padding="22,9" Command="{Binding RetryCommand}" />
+            </StackPanel>
+          </Border>
+
+          <StackPanel IsVisible="{Binding ShowEmpty}" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="6">
+            <TextBlock Classes="h2" Text="Nothing here" HorizontalAlignment="Center" />
+            <TextBlock Text="Try another search or game." Classes="muted" HorizontalAlignment="Center" />
+          </StackPanel>
+        </Panel>
+      </DockPanel>
+
+      <!-- ================= details ================= -->
+      <Border Grid.Column="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1,0,0,0">
+        <Panel>
+          <StackPanel IsVisible="{Binding !HasSelection}" VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="10" Margin="40">
+            <Border Width="64" Height="64" CornerRadius="20" Background="{StaticResource AccentSoft}" HorizontalAlignment="Center">
+              <TextBlock Classes="icon" Text="&#xE8B3;" FontSize="24" Foreground="{StaticResource Accent}"
+                         HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <TextBlock Classes="h2" Text="Pick something to port" HorizontalAlignment="Center" />
+            <TextBlock Text="{Binding Hint}" Classes="muted" TextWrapping="Wrap" TextAlignment="Center" />
+          </StackPanel>
+
+          <DockPanel IsVisible="{Binding HasSelection}" Margin="22,10,22,18">
+            <!-- map preview: the game's loading screen -->
+            <Border DockPanel.Dock="Top" Height="200" CornerRadius="14" ClipToBounds="True" Margin="0,0,0,16"
+                    Background="{Binding SelectedEntry.Accent}" IsVisible="{Binding ShowPreview}" BoxShadow="0 8 24 0 #66000000">
+              <Image Source="{Binding SelectedEntry.Icon}" Stretch="UniformToFill" />
+            </Border>
+            <!-- header -->
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" Margin="0,0,0,16">
+              <Border Width="76" Height="76" CornerRadius="16" Background="{Binding SelectedEntry.Accent}" ClipToBounds="True"
+                      Margin="0,0,16,0" IsVisible="{Binding !ShowPreview}" BoxShadow="0 6 18 0 #55000000">
+                <Panel>
+                  <TextBlock Text="{Binding SelectedEntry.Initials}" FontSize="26" FontWeight="Black" Foreground="White"
+                             HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding !SelectedEntry.HasIcon}" />
+                  <Image Source="{Binding SelectedEntry.Icon}" Stretch="UniformToFill" IsVisible="{Binding SelectedEntry.HasIcon}" />
+                </Panel>
+              </Border>
+              <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="3">
+                <TextBlock Classes="eyebrow" Text="{Binding SelectedEntry.Badge}" Foreground="{StaticResource Sun}"
+                           IsVisible="{Binding SelectedEntry.Badge, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <TextBlock Text="{Binding SelectedEntry.Title}" FontSize="21" FontWeight="Bold" TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="{Binding SelectedEntry.Subtitle}" Classes="muted" FontSize="12.5" TextTrimming="CharacterEllipsis" />
+              </StackPanel>
+            </Grid>
+
+            <!-- options and send -->
+            <Border DockPanel.Dock="Bottom" Classes="card" Padding="16" Margin="0,14,0,0">
+              <StackPanel Spacing="12">
+                <TextBlock Classes="eyebrow" Text="IMPORT OPTIONS" />
+                <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding !IsAnimations}">
+                  <TextBlock Text="Texture size" VerticalAlignment="Center" />
+                  <ComboBox Grid.Column="1" Width="110" ItemsSource="{Binding TextureSizes}" SelectedItem="{Binding TextureSize}" />
+                </Grid>
+                <CheckBox Content="Rig to skeleton" IsChecked="{Binding Rig}" IsVisible="{Binding IsCharacterLike}" />
+                <CheckBox Content="Spawn at the 3D cursor" IsChecked="{Binding SpawnAtCursor}" IsVisible="{Binding IsNpcs}" />
+                <StackPanel Spacing="8" IsVisible="{Binding IsAnimations}">
+                  <TextBlock Text="Put the clips on" />
+                  <ComboBox HorizontalAlignment="Stretch" ItemsSource="{Binding Armatures}" SelectedItem="{Binding Armature}" />
+                  <CheckBox Content="Match scene frame rate" IsChecked="{Binding SetFps}" />
+                </StackPanel>
+                <Button Classes="accent" HorizontalAlignment="Stretch" Padding="0,13" FontSize="15" Margin="0,4,0,0"
+                        Command="{Binding SendCommand}" IsEnabled="{Binding !Sending}">
+                  <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Center">
+                    <TextBlock Classes="icon" Text="&#xE724;" FontSize="14" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding SendText}" VerticalAlignment="Center" />
+                  </StackPanel>
+                </Button>
+                <TextBlock Text="{Binding Hint}" Classes="muted" FontSize="11.5" TextWrapping="Wrap" />
+              </StackPanel>
+            </Border>
+
+            <!-- items -->
+            <DockPanel IsVisible="{Binding HasItems}">
+              <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,8">
+                <TextBlock Classes="eyebrow" Text="{Binding ItemsHeader}" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Classes="ghost" Content="Select all" Padding="10,4" FontSize="12" Command="{Binding SelectAllCommand}" />
+                <Button Grid.Column="2" Classes="ghost" Content="Clear" Padding="10,4" FontSize="12" Command="{Binding SelectNoneCommand}" />
+              </Grid>
+              <Grid DockPanel.Dock="Top" Margin="0,0,0,6">
+                <TextBox Watermark="Filter items…" Text="{Binding ItemSearch}" Padding="34,0,10,0" />
+                <TextBlock Classes="icon" Text="&#xE71C;" FontSize="12" Foreground="{StaticResource Faint}"
+                           Margin="12,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False" />
+              </Grid>
+              <CheckBox DockPanel.Dock="Top" Content="Hide additive layers" IsChecked="{Binding HideAdditive}" IsVisible="{Binding IsAnimations}" />
+              <ListBox Classes="rows" ItemsSource="{Binding Rows}" SelectionMode="Single">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:Row">
+                    <Panel>
+                      <Grid IsVisible="{Binding IsHeader}" ColumnDefinitions="*,Auto" Margin="2,12,2,4">
+                        <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="Bold" LetterSpacing="0.6" Foreground="{StaticResource Accent}" />
+                        <Border Grid.Column="1" Classes="chip" Padding="7,0">
+                          <TextBlock Text="{Binding Detail}" FontSize="10.5" Foreground="{StaticResource Muted}" />
+                        </Border>
+                      </Grid>
+                      <Grid IsVisible="{Binding IsItem}" ColumnDefinitions="Auto,Auto,*,Auto">
+                        <CheckBox IsChecked="{Binding Selected}" MinWidth="0" Margin="0,0,6,0" />
+                        <Border Grid.Column="1" Width="48" Height="48" CornerRadius="9" ClipToBounds="True" Margin="0,4,12,4"
+                                Background="{StaticResource Card}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                                IsVisible="{Binding HasIcon}">
+                          <Image Source="{Binding Item.Icon}" Stretch="Uniform" />
+                        </Border>
+                        <TextBlock Grid.Column="2" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Grid.Column="3" Text="{Binding Detail}" VerticalAlignment="Center" Classes="muted" FontSize="11" />
+                      </Grid>
+                    </Panel>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </DockPanel>
+          </DockPanel>
+        </Panel>
+      </Border>
+    </Grid>
+
+    <!-- ================= settings ================= -->
+    <ScrollViewer Grid.Column="1" Grid.Row="1" IsVisible="{Binding IsSettings}">
+      <StackPanel Margin="32,4,32,32" Spacing="18" MaxWidth="780" HorizontalAlignment="Left">
+        <StackPanel Spacing="3">
+          <TextBlock Classes="h1" Text="Settings" />
+          <TextBlock Classes="muted" FontSize="13" Text="How FrostyBlender finds Blender and your games." />
+        </StackPanel>
+
+        <Border Classes="card">
+          <StackPanel Spacing="14">
+            <Grid ColumnDefinitions="*,Auto">
+              <StackPanel Spacing="2">
+                <TextBlock Classes="eyebrow" Text="BLENDER LINK" />
+                <TextBlock Classes="h2" Text="{Binding BlenderStatus}" />
+              </StackPanel>
+              <Border Grid.Column="1" Classes="chip" VerticalAlignment="Center" Padding="10,4">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                  <Ellipse Width="8" Height="8" Fill="{StaticResource Accent}" IsVisible="{Binding Connected}" VerticalAlignment="Center" />
+                  <Ellipse Width="8" Height="8" Fill="{StaticResource Danger}" IsVisible="{Binding !Connected}" VerticalAlignment="Center" />
+                  <TextBlock Text="Live" FontSize="11" FontWeight="SemiBold" IsVisible="{Binding Connected}" />
+                  <TextBlock Text="Offline" FontSize="11" FontWeight="SemiBold" IsVisible="{Binding !Connected}" />
+                </StackPanel>
+              </Border>
+            </Grid>
+            <TextBlock TextWrapping="Wrap" Classes="muted"
+                       Text="FrostyBlender finds Blender through the Frostbite Map Importer add-on. Install the add-on (Edit › Preferences › Get Extensions › Install from Disk), open Blender once, and keep it open to send imports. Game folders and the BFN key are set in the add-on's preferences." />
+            <Border Height="1" Background="{StaticResource Line}" IsVisible="{Binding LinkLoaded}" />
+            <Grid ColumnDefinitions="170,*" RowDefinitions="28,28,28,28,28,28" IsVisible="{Binding LinkLoaded}">
+              <TextBlock Grid.Row="0" Classes="muted" Text="Add-on version" VerticalAlignment="Center" />
+              <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Info.AddonVersion}" VerticalAlignment="Center" />
+              <TextBlock Grid.Row="1" Classes="muted" Text="Blender" VerticalAlignment="Center" />
+              <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Info.BlenderVersion}" VerticalAlignment="Center" />
+              <TextBlock Grid.Row="2" Classes="muted" Text="Garden Warfare 1" VerticalAlignment="Center" />
+              <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Info.Gw1}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+              <TextBlock Grid.Row="3" Classes="muted" Text="Garden Warfare 2" VerticalAlignment="Center" />
+              <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Info.Gw2}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+              <TextBlock Grid.Row="4" Classes="muted" Text="Neighborville" VerticalAlignment="Center" />
+              <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Info.Bfn}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+              <TextBlock Grid.Row="5" Classes="muted" Text="Output folder" VerticalAlignment="Center" />
+              <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding Info.Work}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+            </Grid>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Classes="accent" Content="Reconnect" Padding="18,8" Command="{Binding RetryCommand}" />
+              <Button Content="Open output folder" Padding="16,8" Command="{Binding OpenCommand}" CommandParameter="{Binding Info.Work}"
+                      IsVisible="{Binding LinkLoaded}" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <Grid ColumnDefinitions="Auto,*">
+            <Border Width="72" Height="72" CornerRadius="18" Background="{StaticResource BrandGradient}" BorderBrush="#3A5A30" BorderThickness="1"
+                    VerticalAlignment="Top" Margin="0,0,18,0">
+              <Image Source="/Assets/icon.png" Width="62" Height="62" />
+            </Border>
+            <StackPanel Grid.Column="1" Spacing="6">
+              <TextBlock Classes="eyebrow" Text="ABOUT" />
+              <TextBlock FontSize="20" FontWeight="Bold">
+                <Run Text="Frosty" /><Run Text="Blender" Foreground="{StaticResource Accent}" />
+                <Run Text="  " /><Run Text="{Binding AppVersion}" FontSize="12" FontWeight="Normal" Foreground="{StaticResource Muted}" />
+              </TextBlock>
+              <StackPanel Spacing="3" Margin="0,4,0,0">
+                <TextBlock><Run Text="Made by " Foreground="{StaticResource Muted}" /><Run Text="4FingerStudios" FontWeight="SemiBold" /></TextBlock>
+                <TextBlock><Run Text="Plugin by " Foreground="{StaticResource Muted}" /><Run Text="Zander/SillyDev" FontWeight="SemiBold" /></TextBlock>
+                <TextBlock><Run Text="Code base by " Foreground="{StaticResource Muted}" /><Run Text="Brando/Physics" FontWeight="SemiBold" /></TextBlock>
+              </StackPanel>
+              <TextBlock Classes="muted" FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap"
+                         Text="Fan-made tool, not affiliated with or endorsed by Electronic Arts or PopCap. GPL-3.0-or-later." />
+            </StackPanel>
+          </Grid>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+
+    <!-- ================= status bar ================= -->
+    <Border Grid.Row="2" Grid.ColumnSpan="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0">
+      <Grid ColumnDefinitions="Auto,*" Margin="16,0">
+        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <Ellipse Width="8" Height="8" Fill="{StaticResource Accent}" IsVisible="{Binding Connected}" />
+          <Ellipse Width="8" Height="8" Fill="{StaticResource Danger}" IsVisible="{Binding !Connected}" />
+          <TextBlock Text="{Binding BlenderStatus}" FontSize="11.5" Foreground="{StaticResource Muted}" />
+        </StackPanel>
+        <TextBlock Grid.Column="1" Text="{Binding JobStatus}" FontSize="11.5" Foreground="{StaticResource Muted}" HorizontalAlignment="Right"
+                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="20,0,0,0" />
+      </Grid>
+    </Border>
+  </Grid>
+</Window>

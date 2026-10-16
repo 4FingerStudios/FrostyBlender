@@ -199,7 +199,9 @@ class Gw2Converter(Converter):
                 else:
                     unresolved.append(role + ':' + guid)
         if unresolved:
-            raise ValueError('GW2 material textures unresolved: ' + ', '.join(unresolved))
+            # A texture the game files do not hold must not cost the whole mesh: keep the rest.
+            self.errors.append({'stage': 'material', 'name': mesh[1].get('Name', ''),
+                                'error': 'GW2 material textures unresolved: ' + ', '.join(unresolved)})
         content = {'textures': paths, 'texture_bindings': bindings, 'source_shader': shader,
                    'shader_name': graph_name, 'alpha_cutoff': cutoff, 'tint': tint}
         digest = hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:20]
