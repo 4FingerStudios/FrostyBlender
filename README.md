@@ -1,13 +1,15 @@
 # Frostbite Map Importer for Blender
 
+Made by **4FingerStudios**  
+Plugin by **Zander/SillyDev**  
+Code Base By **Brando/Physics**
+
 **Two things players should know:**
 
 * The BFN key isn’t included. Players type in their own; GW1 and GW2 need no setup at all.
 * The table of BFN data names comes from Frosty Editor’s public data. It’s bundled so players don’t need Frosty. If you’d rather not share it, run `python build.py --no-types` in the public folder; BFN players would then need Frosty installed to build the table themselves.
 
 Bring maps, characters, customizations, NPCs, props and animations from **Plants vs. Zombies: Garden Warfare**, **Garden Warfare 2** and **Battle for Neighborville** into Blender.
-
-By **4FingerStudios** · Made By Brando · Plugin made By SillyDev
 
 ## What you need
 
