@@ -74,3 +74,34 @@ This writes `dist/frostbite_importer-<version>-windows-x64.zip`.
 ## License
 
 GPL-3.0-or-later (see `LICENSE`). This repository is the full source of the release. This is a fan-made tool, not affiliated with or endorsed by Electronic Arts or PopCap. Plants vs. Zombies is a trademark of Electronic Arts Inc.
+
+## Community
+
+<p align="center">
+  <a href="https://discord.gg/Vh7cgGzUyB"><img src="https://img.shields.io/badge/Join%20our%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join our Discord"></a>
+</p>
+
+## Project stats
+
+<p align="center">
+  <a href="https://github.com/4FingerStudios/FrostyBlender/releases/latest"><img src="https://img.shields.io/github/v/release/4FingerStudios/FrostyBlender?style=for-the-badge&label=latest&color=2ea043" alt="Latest release"></a>
+  <a href="https://github.com/4FingerStudios/FrostyBlender/releases"><img src="https://img.shields.io/github/downloads/4FingerStudios/FrostyBlender/total?style=for-the-badge&color=0a84ff" alt="Downloads"></a>
+  <a href="https://github.com/4FingerStudios/FrostyBlender/stargazers"><img src="https://img.shields.io/github/stars/4FingerStudios/FrostyBlender?style=for-the-badge&color=f5c518" alt="Stars"></a>
+  <a href="https://github.com/4FingerStudios/FrostyBlender/forks"><img src="https://img.shields.io/github/forks/4FingerStudios/FrostyBlender?style=for-the-badge" alt="Forks"></a>
+</p>
+<p align="center">
+  <a href="https://github.com/4FingerStudios/FrostyBlender/issues"><img src="https://img.shields.io/github/issues/4FingerStudios/FrostyBlender?style=for-the-badge" alt="Open issues"></a>
+  <a href="https://github.com/4FingerStudios/FrostyBlender/commits/main"><img src="https://img.shields.io/github/last-commit/4FingerStudios/FrostyBlender?style=for-the-badge" alt="Last commit"></a>
+  <img src="https://img.shields.io/github/repo-size/4FingerStudios/FrostyBlender?style=for-the-badge" alt="Repo size">
+  <img src="https://img.shields.io/github/languages/top/4FingerStudios/FrostyBlender?style=for-the-badge" alt="Top language">
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/4FingerStudios/FrostyBlender?style=for-the-badge" alt="License"></a>
+</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/Blender-4.2%2B-F5792A?style=for-the-badge&logo=blender&logoColor=white" alt="Blender 4.2+">
+  <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?style=for-the-badge" alt="Windows 10 | 11">
+  <img src="https://img.shields.io/badge/Games-GW1%20%7C%20GW2%20%7C%20BFN-7cb342?style=for-the-badge" alt="GW1 | GW2 | BFN">
+</p>
+
+<p align="center">
+  <a href="https://star-history.com/#4FingerStudios/FrostyBlender&Date"><img src="https://api.star-history.com/svg?repos=4FingerStudios/FrostyBlender&type=Date" alt="Star history" width="600"></a>
+</p>
