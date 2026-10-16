@@ -1,0 +1,14 @@
+schema_version = "1.0.0"
+
+id = "frostbite_importer"
+version = "1.8.0"
+name = "Frostbite Map Importer"
+tagline = "Import Garden Warfare 1 & 2, Neighborville and Skate maps"
+maintainer = "4FingerStudios"
+type = "add-on"
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
+category = "Import-Export"
+
+[permissions]
+files = "Reads game archives and writes converted meshes and textures"
