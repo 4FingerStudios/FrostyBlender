@@ -1,18 +1,20 @@
-# Frostbite Map Importer for Blender
+# FrostyBlender
 
-Made by **4FingerStudios**  
-Plugin by **Zander/SillyDev**
-App Assistance *Spooky4576**  
-Code Base By **Brando/Physics**
-Specail Thanks too **Window***
-Thank you to our Testers **_Crow**
+Bring maps, characters, customizations, NPCs, props and animations from **Plants vs. Zombies: Garden Warfare**, **Garden Warfare 2** and **Battle for Neighborville** into Blender. FrostyBlender is two parts that work together: a Blender add-on (the Frostbite Map Importer) that does the importing, and a desktop app for browsing everything and sending it to Blender in one click.
 
-**Two things players should know:**
+## Credits
 
-* The BFN key isn’t included. Players type in their own; GW1 and GW2 need no setup at all.
-* The table of BFN data names comes from Frosty Editor’s public data. It’s bundled so players don’t need Frosty. If you’d rather not share it, run `python build.py --no-types` in the public folder; BFN players would then need Frosty installed to build the table themselves.
+- Made by **4FingerStudios**
+- Plugin by **Zander/SillyDev**
+- App assistance by **Spooky4576**
+- Code base by **Brando/Physics**
+- Special thanks to **Window**
+- Thank you to our testers: **\_Crow**
 
-Bring maps, characters, customizations, NPCs, props and animations from **Plants vs. Zombies: Garden Warfare**, **Garden Warfare 2** and **Battle for Neighborville** into Blender.
+## Good to know
+
+- **Battle for Neighborville needs a key.** BFN's files are encrypted, and the key isn't included. Enter your own in the add-on preferences. Garden Warfare 1 and 2 need no setup at all.
+- **No Frosty Editor needed.** The add-on comes with the table of BFN data names (taken from Frosty Editor's public data), so you don't need Frosty installed.
 
 ## What you need
 
@@ -24,9 +26,15 @@ Nothing else to install: the add-on brings its own tools and runs them on Blende
 
 ## Install
 
-1. Download `frostbite_importer-…-windows-x64.zip` from the **Releases** page. Don't unzip it.
-2. In Blender: **Edit → Preferences → Get Extensions → ⌄ (top right) → Install from Disk…** and pick the zip.
-3. Open the add-on's preferences (**Edit → Preferences → Add-ons → Frostbite Map Importer**). Check that your games show a ✓ under **Game folders**. They're usually found automatically. If one shows ⚠, click its folder icon and pick the game's install folder (the folder that holds the game's `.exe`).
+Download both files from the [latest release](https://github.com/4FingerStudios/FrostyBlender/releases/latest):
+
+| File | What it is |
+| --- | --- |
+| `frostbite_importer-…-windows-x64.zip` | The Blender add-on. Needed for everything. |
+| `FrostyBlender-…-windows-x64.exe` | The desktop app (optional). One file, nothing to install. |
+
+1. In Blender: **Edit → Preferences → Get Extensions → ⌄ (top right) → Install from Disk…** and pick the zip. Don't unzip it. If you're updating, restart Blender afterwards.
+2. Open the add-on's preferences (**Edit → Preferences → Add-ons → Frostbite Map Importer**). Check that your games show a ✓ under **Game folders**. They're usually found automatically. If one shows ⚠, click its folder icon and pick the game's install folder (the folder that holds the game's `.exe`).
 
 That's all you need for Garden Warfare 1 and 2.
 
@@ -56,7 +64,7 @@ Tips:
 A desktop app for browsing everything in the games, in the style of Fortnite Porting. Pick **Maps**, **Characters**, **NPCs**, **Props** or **Animations**, choose GW1 / GW2 / BFN, click a tile, tick what you want and press **Send to Blender**.
 
 1. Install the add-on (above) and open Blender once. The add-on tells the app where Blender, its tools and your game folders are.
-2. Download `FrostyBlender-…-windows-x64.exe` and run it. Nothing else to install.
+2. Run `FrostyBlender-…-windows-x64.exe`. It needs add-on 1.9.1 or newer for icons and loading screens.
 3. Keep Blender open while you send imports. The status bar shows when Blender is connected.
 
 Maps and props show each map's loading screen, so you can see what you're porting. Characters, NPCs and animated characters show the games' own menu art: hero portraits, boss heads, turret cards and the icon of each cosmetic. Icons are made the first time you open a game or character (a few seconds) and kept, so they show instantly after that. Items the game has no art for keep a plain row.
@@ -68,6 +76,7 @@ Browsing works even when Blender is closed. Imports run in Blender exactly as if
 - **"Set the … game folder"**: set that game's folder in the add-on preferences (the folder with the game's `.exe`).
 - **BFN import fails right away**: check the BFN key in the preferences.
 - **Import failed**: the status box names a log file in the job's folder under Documents\Frostbite Blender. Include it when you report a problem.
+- **No icons or loading screens in the app**: install the newest add-on zip and restart Blender. The app's status bar says so when the add-on is too old.
 
 ## Building from source
 
@@ -77,7 +86,7 @@ Most people should download the ready-made zip from the **Releases** page. To bu
 python build.py --blender "C:\Program Files\Blender Foundation\Blender 4.2\blender.exe"
 ```
 
-This writes `dist/frostbite_importer-<version>-windows-x64.zip`, and, if the .NET 8 SDK is installed, `dist/FrostyBlender-<version>-windows-x64.exe` (skip it with `--no-app`).
+This writes `dist/frostbite_importer-<version>-windows-x64.zip`, and, if the .NET 8 SDK is installed, `dist/FrostyBlender-<version>-windows-x64.exe` (skip it with `--no-app`). Add `--no-types` to leave the BFN data name table out of the zip; BFN players would then need Frosty Editor to build it themselves.
 
 | Folder | What's in it |
 | --- | --- |
