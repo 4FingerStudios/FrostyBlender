@@ -28,6 +28,8 @@ class FrostbiteAnimCharacter(bpy.types.PropertyGroup):
     name: StringProperty()
     rig: StringProperty()
     count: IntProperty()
+    model: StringProperty(description='The model these clips animate')
+    model_tab: StringProperty(description='The sidebar tab that imports it')
 
 
 class FrostbiteClip(bpy.types.PropertyGroup):
@@ -117,6 +119,9 @@ class FROSTBITE_OT_animations_scan(bpy.types.Operator):
         for c in result['characters']:
             entry = state.characters.add()
             entry.name, entry.rig, entry.count = c['name'], c['rig'], len(c['clips'])
+            if c.get('model'):
+                entry.model = c['model']['name']
+                entry.model_tab = 'Customizations' if c['model']['section'] == 'Characters' else 'NPCs'
         state.char_index = 0
         _fill_clips(state, context)
         self.report({'INFO'}, 'Found %d characters, %d clips' % (len(state.characters), sum(c.count for c in state.characters)))
@@ -255,6 +260,11 @@ class FROSTBITE_PT_animations(bpy.types.Panel):
         layout.operator('frostbite.animations_scan', icon='VIEWZOOM')
         layout.label(text='Character')
         layout.template_list('FROSTBITE_UL_anim_characters', '', state, 'characters', state, 'char_index', rows=5)
+        if 0 <= state.char_index < len(state.characters) and state.characters[state.char_index].model:
+            character = state.characters[state.char_index]
+            box = layout.box()
+            box.label(text='Model: %s' % character.model, icon='ARMATURE_DATA')
+            box.label(text='Import it rigged from the %s tab first' % character.model_tab)
         if state.clips:
             row = layout.row(align=True)
             row.prop(state, 'search', icon='VIEWZOOM')

@@ -190,7 +190,9 @@ class Gw2Converter(Converter):
         for role, names in [('base', ('Color', 'Diffuse', 'BaseColor', 'Albedo', 'DiffuseTexture', 'Material1_Diffuse', 'PositiveDiffuse')),
                             ('normal', ('Normal', 'NormalMap', 'NormalTexture', 'Material1_Normal', 'PositiveNormal')),
                             ('mask', ('ASM', 'Mask', 'Specular')),
-                            ('emissive', ('Emissive', 'EmissiveColor'))]:
+                            ('emissive', ('Emissive', 'EmissiveColor')),
+                            # Read by the add-on's optional game shaders (see materials.py there).
+                            ('asm', ('ASM',)), ('ett', ('ETT',)), ('specular_masks', ('Specular_Masks',))]:
             guid = next((bindings[name] for name in names if name in bindings), None)
             if guid:
                 path = self.texture(guid)
@@ -202,8 +204,10 @@ class Gw2Converter(Converter):
             # A texture the game files do not hold must not cost the whole mesh: keep the rest.
             self.errors.append({'stage': 'material', 'name': mesh[1].get('Name', ''),
                                 'error': 'GW2 material textures unresolved: ' + ', '.join(unresolved)})
+        vectors = {p.get('ParameterName', ''): [float(p.get('Value', {}).get(c, 0)) for c in 'xyzw']
+                   for p in shader.get('VectorParameters', []) if p.get('ParameterName')}
         content = {'textures': paths, 'texture_bindings': bindings, 'source_shader': shader,
-                   'shader_name': graph_name, 'alpha_cutoff': cutoff, 'tint': tint}
+                   'shader_name': graph_name, 'alpha_cutoff': cutoff, 'tint': tint, 'vectors': vectors}
         digest = hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:20]
         if digest in self.materials:
             return self.materials[digest]

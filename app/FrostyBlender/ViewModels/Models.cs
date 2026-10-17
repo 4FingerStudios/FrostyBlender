@@ -44,6 +44,15 @@ public sealed partial class Entry : ObservableObject
     }
 
     public string Search { get; init; } = "";
+
+    /// <summary>For an animated rig: the model its clips play on, and the section that imports it.</summary>
+    public string ModelName { get; init; } = "";
+    public string ModelId { get; init; } = "";
+    public string ModelSection { get; init; } = "";
+    public bool HasModel => ModelId.Length > 0;
+    public string ModelHint => ModelSection == "Characters"
+        ? "Import it rigged from Characters, then send these clips."
+        : "Import it rigged from NPCs, then send these clips.";
 }
 
 /// <summary>A row in the detail list: a group header or a tickable item.</summary>
@@ -91,6 +100,7 @@ public static class Palette
     public static readonly IBrush Gnomes = Gradient("#FFB74D", "#EF6C00");
     public static readonly IBrush Maps = Gradient("#4DD0E1", "#00838F");
     public static readonly IBrush Props = Gradient("#90A4AE", "#455A64");
+    public static readonly IBrush Effects = Gradient("#FF8A65", "#D84315");
     public static readonly IBrush Neutral = Gradient("#78909C", "#37474F");
 
     public static IBrush Team(string team) => team switch

@@ -431,10 +431,12 @@ def complete_dependencies(game, output, inventory):
     documents = [(a, json.loads((Path(output) / a['document']).read_text()))
                  for a in inventory['assets'] if 'document' in a]
     follow = {'WorldPartData', 'ObjectBlueprint', 'SpatialPrefabBlueprint', 'LogicPrefabBlueprint', 'SubWorldData',
-              'RigidMeshAsset', 'CompositeMeshAsset', 'MeshVariationDatabase', 'TextureAsset', 'TerrainData'}
+              'RigidMeshAsset', 'CompositeMeshAsset', 'SkinnedMeshAsset', 'MeshVariationDatabase', 'TextureAsset',
+              'AtlasTextureAsset',
+              'TerrainData'}
     resources = {a['resource_id'] for a in inventory['assets'] if a['kind'] == 'resource'}
     # Texture assets import nothing, so a missing resource also needs the index.
-    missing = any(doc['root_type'] == 'TextureAsset' and (doc['objects'][0].get('Resource') or {}).get('$resource') not in resources
+    missing = any(doc['root_type'] in ('TextureAsset', 'AtlasTextureAsset') and (doc['objects'][0].get('Resource') or {}).get('$resource') not in resources
                   for asset, doc in documents if doc['objects'])
     if not missing and not any(ref['file'] not in existing for asset, doc in documents
                                if doc['root_type'] in follow for ref in doc['imports']):
@@ -480,12 +482,12 @@ def complete_dependencies(game, output, inventory):
                 item['root_type'], item['guid'] = decoded['root_type'], decoded['guid']
                 documents.append((item, decoded))
         root = doc['objects'][0]
-        field = 'Resource' if doc['root_type'] == 'TextureAsset' else 'TerrainStreamingTreeResource' if doc['root_type'] == 'TerrainData' else 'MeshSetResource'
+        field = 'Resource' if doc['root_type'] in ('TextureAsset', 'AtlasTextureAsset') else 'TerrainStreamingTreeResource' if doc['root_type'] == 'TerrainData' else 'MeshSetResource'
         resource = root.get(field, {}).get('$resource')
         if resource and resource not in resources:
             resources.add(resource)
             found = obtain('resource', resource)
-            if found and doc['root_type'] in ('RigidMeshAsset', 'CompositeMeshAsset'):
+            if found and doc['root_type'] in ('RigidMeshAsset', 'CompositeMeshAsset', 'SkinnedMeshAsset'):
                 mesh = found[1]
                 lod = struct.unpack_from('<Q', mesh, 32)[0]
                 # GW2 names the geometry chunk at LOD + 96; Garden Warfare 1 at LOD + 88.

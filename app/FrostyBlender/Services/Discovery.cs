@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace FrostyBlender.Services;
 
-/// <summary>Lists a game's maps, characters, NPCs, props and animations by running the add-on's own
+/// <summary>Lists a game's maps, characters, NPCs, props, effects and animations by running the add-on's own
 /// discover tools on Blender's Python (so Blender does not need to be open). Results are cached per
 /// game and add-on version; a refresh scans again.</summary>
 public sealed class Discovery
@@ -21,6 +21,7 @@ public sealed class Discovery
         Section.Characters => "cosmetics-discover",
         Section.Npcs => "npcs-discover",
         Section.Props => "props-discover",
+        Section.Effects => "effects-discover",
         Section.Animations => "animations-discover",
         _ => throw new ArgumentOutOfRangeException(nameof(section)),
     };
@@ -78,4 +79,4 @@ public sealed class Discovery
     }
 }
 
-public enum Section { Maps, Characters, Npcs, Props, Animations, Settings }
+public enum Section { Maps, Characters, Npcs, Props, Effects, Animations, Settings }

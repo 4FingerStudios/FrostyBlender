@@ -14,11 +14,13 @@ BFN also needs AURA_BFN_KEY, as for maps. Game files are only read.
 import argparse
 import json
 import re
+import struct
 import sys
 from pathlib import Path
 
 import cosmetics
 from cosmetics import bundle_names, game_kind, title
+from icons import norm
 
 GW1_AI = re.compile(r'^win32/_pvz/animations/characters/ai/([^/]+)/(?:([^/]+)/)?([^/]+)_bpb$')
 GW_NPC = re.compile(r'^win32/(?:gw2_)?characters(?:_cu\d+)?/(plants?|zombie|gnome)/(.+)_bpb$')
@@ -101,11 +103,157 @@ def discover(game):
         if label in taken:  # BFN keeps GW2's copies beside its own
             label += ' (GW2)' if '/gw2_characters/' in name.lower() else ' (%d)' % len(items)
         items.append({'name': label, 'bundle': name, 'sb': sb, 'character': npc})
+    owner_abilities(game, kind, npcs)
+    playable = {c['id'] for c in cosmetics.discover(game)['characters']}
+    for oid, entry in objects(game, kind, set(npcs) | playable).items():
+        npcs.setdefault(oid, entry)
     for entry in npcs.values():
         for items in entry['slots'].values():
             items.sort(key=lambda i: i['name'])
-    order = {'Horde': 0, 'AI': 0, 'Boss': 1, 'Deployable': 2, 'Vehicle': 3}
+    order = {'Horde': 0, 'AI': 0, 'Boss': 1, 'Deployable': 2, 'Vehicle': 3, 'Ability': 4}
     return {'game': kind, 'characters': sorted(npcs.values(), key=lambda c: (c['team'], order.get(c['group'], 9), c['name']))}
+
+
+# Where skeleton-only characters live, and the group each folder means.
+OBJECT_GROUPS = {'simple': 'Ability', 'simpleobject': 'Ability', 'vehicle': 'Vehicle', 'boss': 'Boss', 'subboss': 'Boss',
+                 'turret': 'Deployable', 'horde': 'Horde', 'ai': 'AI'}
+OBJECT_SKIP = re.compile(r'(^|/)(fx|vfx|ui|levels?|levels_sandbox|worlds|sound|online)/|emitters|vfx_|collision|_lod\d|'
+                         r'shadow|debris|destruction|/playable/|_1p_|firstperson')
+FOLDER_WORDS = {'rigandmodel', 'body', 'base', 'prop', 'mech', 'costume', 'meshes', 'abilities'}
+# Pickups and level props that happen to share these folders are not characters.
+NOT_OBJECTS = {'bagofcoins', 'rotatingcoin', 'spinningdiamond'}
+# Abilities whose meshes go by another name than their skeleton folder.
+OBJECT_ALIASES = {'cactusdrone': ['garlicdrone', 'cactusgarlic'], 'engineer_bullhorn_mine': ['sonicmine', 'bullhorn'],
+                  'pirateparrot': ['parrotvehicle'], 'engineer_drone': ['engineerdrone'], 'tallnuts': ['tallnut_four']}
+# Words in an object's name that only say whose ability it is.
+OWNER_WORDS = ('engineer', 'cactus', 'pirate', 'peashooter', 'chomper', 'sunflower', 'scientist', 'soldier', 'allstar',
+               'rose', 'citron', 'imp', 'zombie', 'plant')
+# GW1 keeps every object under one folder; these are the zombie side.
+GW1_ZOMBIE_OBJECTS = {'revivalspring', 'teleporter', 'engineer_drone', 'engineer_bullhorn_mine', 'allstarimpgrenade',
+                      'armgrenade', 'tactical_cuke'}
+
+
+def _ebx_names(game, kind):
+    """Every EBX name of a game (GW1/GW2 from the shared index; BFN from the bundle manifests)."""
+    if kind == 'bfn':
+        import bfn
+        archive = bfn.Archive(game)
+        names = set()
+        for sb in archive.sbs:
+            for entry in archive.toc(sb)['bundles'].values():
+                try:
+                    listed = archive.bundle(entry)
+                except (ValueError, struct.error, IndexError):
+                    continue
+                names.update(a['name'].lower() for a in listed if a['kind'] == 'ebx')
+        return names
+    import gw2
+    return {loc[3]['name'].lower() for loc in gw2.cached_dependency_index(Path(game))['ebx'].values()}
+
+
+def _object_folder(name):
+    """(team word, group word, id, folder prefix) of a character-like asset path, or None."""
+    parts = name.split('/')
+    if parts[0] == '_pvz' and len(parts) > 4 and parts[1:3] == ['animations', 'characters'] and parts[3] in ('simpleobject', 'ai'):
+        return 'plants', parts[3], parts[4], '/'.join(parts[:5]) + '/'
+    if re.fullmatch(r'(gw2_)?characters(_cu\d+)?', parts[0]) and len(parts) > 4 and parts[2] in OBJECT_GROUPS:
+        return parts[1], parts[2], parts[3], '/'.join(parts[:4]) + '/'
+    # BFN hero abilities: characters/<team>/playable/<hero>/abilities/<ability>/
+    if re.fullmatch(r'characters(_cu\d+)?', parts[0]) and len(parts) > 6 and parts[2] == 'playable' and parts[4] == 'abilities':
+        return parts[1], 'simple', parts[5], '/'.join(parts[:6]) + '/'
+    return None
+
+
+def _keys(oid):
+    """Names an object's held meshes may carry: its own, without its owner's name, and known aliases."""
+    keys = {norm(oid)} if len(norm(oid)) >= 5 else set()
+    for word in OWNER_WORDS:  # 'pirateparrot' -> 'parrot' only when what is left is still specific
+        rest = norm(oid[len(word):]) if oid.startswith(word) else ''
+        if len(rest) >= 7:
+            keys.add(rest)
+    keys |= {norm(a) for a in OBJECT_ALIASES.get(oid, [])}
+    return keys
+
+
+def objects(game, kind, known):
+    """Entries for characters that have a skeleton and meshes but no unlock bundle: ability objects such as
+    the Chili Bean bomb or Potato Mine, drones, and the odd boss or vehicle. A character's meshes and skeleton
+    may sit in different folders of the same name (GW2 keeps some skeletons in the old _pvz tree), so every
+    folder named after it counts. Items name their meshes, which the cosmetics export reads directly.
+    Abilities also take the meshes under weapons/ named after them (the version held in hand)."""
+    names = _ebx_names(game, kind)
+    known = {norm(k) for k in known}
+    folders = {}
+    for name in names:
+        found = _object_folder(name)
+        if not found:
+            continue
+        team, group, oid, prefix = found
+        info = folders.setdefault(oid, {'team': team, 'groups': set(), 'prefixes': set(), 'skeleton': False})
+        info['groups'].add(group)
+        info['prefixes'].add(prefix)
+        if name.endswith('skeleton'):
+            info['skeleton'] = True
+        if not team.startswith('plant') and not team.startswith('gnome') and team not in ('simpleobject', 'ai'):
+            info['team'] = team
+    skeletons = [n for n in names if n.endswith('skeleton')]
+    for oid, info in folders.items():  # a hero ability folder may borrow a skeleton kept elsewhere
+        if not info['skeleton'] and any(k in norm(n.rsplit('/', 1)[-1]) for n in skeletons for k in _keys(oid) if len(k) >= 8):
+            info['skeleton'] = True
+    meshes = sorted(n for n in names if n.endswith('_mesh') and not OBJECT_SKIP.search(n.replace('/playable/', '/')))
+    weapons = [n for n in meshes if '/weapons/' in n or n.startswith(('gameplay/', '_pvz/weapons/')) or '/abilities/' in n]
+    out = {}
+    for oid, info in folders.items():
+        if not info['skeleton'] or norm(oid) in known or oid in NOT_OBJECTS:
+            continue
+        groups = info['groups']
+        group = 'Ability' if groups & {'simple', 'simpleobject'} else OBJECT_GROUPS.get(sorted(groups)[0], 'AI')
+        prefixes = sorted(info['prefixes'])
+        own = [(n, next(p for p in prefixes if n.startswith(p))) for n in meshes if any(n.startswith(p) for p in prefixes)]
+        keys = _keys(oid)
+        def matches(n):
+            folder = re.search(r'/abilities/([^/]+)/', n)
+            if folder:  # another hero's ability folder: only when that folder is this ability
+                return norm(folder.group(1)) in keys
+            return any(k in norm(n.rsplit('/', 1)[-1]) for k in keys)
+        held = [n for n in weapons if matches(n) and not any(n == m for m, _ in own)]
+        if own and group != 'Ability':
+            held = []  # bosses and vehicles have their own meshes; projectiles named after them are noise
+        if not own and not held:
+            continue
+        team = info['team']
+        team = 'Zombies' if team.startswith('zombie') or oid in GW1_ZOMBIE_OBJECTS else 'Gnomes' if team.startswith('gnome') else 'Plants'
+        entry = out.setdefault(oid, {'name': title(oid), 'id': oid, 'team': team, 'group': group, 'slots': {}})
+        for mesh, prefix in own + [(n, None) for n in held]:
+            leaf = re.sub(r'_mesh$', '', mesh.rsplit('/', 1)[-1])
+            if prefix is None:
+                slot = 'held'
+            else:
+                rest = mesh[len(prefix):]
+                folder = rest.split('/')[0] if '/' in rest else 'body'
+                slot = 'body' if folder in FOLDER_WORDS else folder
+            label = title(re.sub(r'^(%s|%s)_?(body_)?' % (re.escape(oid), re.escape(oid.replace('_', ''))), '', leaf)) or 'Default'
+            items = entry['slots'].setdefault(slot, [])
+            if any(i['asset'] == mesh for i in items):
+                continue
+            if any(i['name'] == label for i in items):
+                label = title(leaf)
+            items.append({'name': label, 'bundle': 'asset:' + mesh, 'asset': mesh, 'sb': '', 'character': oid})
+    return out
+
+
+def owner_abilities(game, kind, npcs):
+    """BFN keeps NPC ability meshes (rock throws, grenades) under <npc>/abilities/: add them to that NPC."""
+    for name in sorted(_ebx_names(game, kind)) if kind == 'bfn' else ():
+        match = re.match(r'^characters(?:_cu\d+)?/[^/]+/[^/]+/([^/]+)/abilities/([^/]+)/.*_mesh$', name)
+        if not match or OBJECT_SKIP.search(name) or match.group(1) not in npcs:
+            continue
+        npc, ability = match.groups()
+        items = npcs[npc]['slots'].setdefault('abilities', [])
+        label = title(re.sub(r'^%s_abilit(?:y|ies)_' % re.escape(npc), '', name.rsplit('/', 1)[-1][:-5]))
+        if any(i.get('asset') == name for i in items):
+            continue
+        items.append({'name': label, 'bundle': 'asset:' + name, 'asset': name, 'sb': '', 'character': npc})
 
 
 def main():

@@ -18,7 +18,7 @@ BRIDGE = Path(__file__).with_name('bridge.py')
 BUNDLED_TOOLS = Path(__file__).with_name('tools')
 BUNDLED_READER = Path(__file__).parent / 'bin' / 'aura_frostbite_reader.exe'
 BUNDLED_TYPES = Path(__file__).parent / 'data' / 'bfn_types.json'
-CREDITS = ('4FingerStudios', 'Made By Brando', 'Plugin made By SillyDev')
+CREDITS = ('4FingerStudios', 'Made By Brando', 'Plugin made By SillyDev', 'Effects idea by V0e')
 _job = {}  # the one running background process
 # Game executables, by the preference holding that game's folder.
 GAMES = {'gw1_path': 'PVZ.Main_Win64_Retail.exe', 'gw2_path': 'GW2.Main_Win64_Retail.exe',
@@ -212,6 +212,10 @@ class FrostbiteState(bpy.types.PropertyGroup):
     index: IntProperty()
     texture_size: EnumProperty(name='Texture size', default='1024', items=[
         ('512', '512', ''), ('1024', '1024', ''), ('2048', '2048', 'Largest; uses much more disk')])
+    game_shaders: BoolProperty(name='Game shaders', default=False,
+                               description='Garden Warfare 1 and 2: build materials the way the games\' shaders read '
+                                           'their textures (ambient occlusion, smoothness, metalness, tint masks, '
+                                           'emissive). Off: the simpler default materials')
     keep: BoolProperty(name='Keep intermediate files', default=False,
                        description='Keep raw archive exports and decoded textures (several GB) for debugging')
     include_collision: BoolProperty(name='Collision objects', default=False,
@@ -510,6 +514,7 @@ class FROSTBITE_PT_panel(bpy.types.Panel):
             layout.label(text=state.maps[state.index].package.split('/')[-1], icon='FILE')
         col = layout.column(align=True)
         col.prop(state, 'texture_size')
+        col.prop(state, 'game_shaders')
         col.prop(state, 'group_by_level')
         col.prop(state, 'include_collision')
         col.prop(state, 'keep')
@@ -549,7 +554,7 @@ classes = (FrostbitePreferences, FrostbiteMap, FrostbiteState, FROSTBITE_OT_buil
 
 
 # The Customizations tab uses the helpers above, so it is imported after them.
-from . import animation_import, animations_ui, app_link, cosmetics_ui, npcs_ui, props_ui  # noqa: E402
+from . import animation_import, animations_ui, app_link, cosmetics_ui, effects_ui, npcs_ui, props_ui  # noqa: E402
 
 
 def _apply_link(restart=False):
@@ -573,6 +578,7 @@ def register():
     cosmetics_ui.register()
     npcs_ui.register()
     props_ui.register()
+    effects_ui.register()
     animations_ui.register()
     bpy.app.timers.register(_apply_link, first_interval=1.0)
 
@@ -580,6 +586,7 @@ def register():
 def unregister():
     app_link.stop()
     animations_ui.unregister()
+    effects_ui.unregister()
     props_ui.unregister()
     npcs_ui.unregister()
     cosmetics_ui.unregister()

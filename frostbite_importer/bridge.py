@@ -6,6 +6,7 @@
     python bridge.py cosmetics-discover --tools TOOLS --game GAME --out cosmetics.json
     python bridge.py props-discover --tools TOOLS --game GAME --out props.json  (props-import as cosmetics-import)
     python bridge.py npcs-discover --tools TOOLS --game GAME --out npcs.json  (npcs-import as cosmetics-import)
+    python bridge.py effects-discover --tools TOOLS --game GAME --out effects.json  (effects-import as cosmetics-import)
     python bridge.py icons --tools TOOLS --reader READER --game GAME --items REQUESTS.json --icons-dir DIR --out result.json
     python bridge.py animations-discover --tools TOOLS --game GAME --out clips.json
     python bridge.py animations-import --tools TOOLS --game GAME --items ITEMS.json --job JOB
@@ -88,6 +89,12 @@ def npcs_discover(args):
     write_json(args.out, dict(npcs.discover(args.game), ok=True))
 
 
+def effects_discover(args):
+    sys.path.insert(0, str(args.tools))
+    import effects
+    write_json(args.out, dict(effects.discover(args.game), ok=True))
+
+
 def icons(args):
     """Game UI icons for characters, NPCs and cosmetics, as PNGs (see tools/icons.py)."""
     sys.path.insert(0, str(args.tools))
@@ -125,6 +132,11 @@ def npcs_import(args):
     return cosmetics_import(args, 'npcs.py')
 
 
+def effects_import(args):
+    """Chosen effects -> textures -> particle data the add-on plays back with Geometry Nodes."""
+    return cosmetics_import(args, 'effects.py')
+
+
 def cosmetics_import(args, tool='cosmetics.py'):
     """Chosen cosmetic bundles -> textures -> meshes placed where the character's skeleton expects them."""
     job = args.job
@@ -132,7 +144,7 @@ def cosmetics_import(args, tool='cosmetics.py'):
     tools, game = args.tools, args.game
     exported, textures, assets, scene = job / 'export', job / 'textures', job / 'assets', job / 'scene.json'
     command = [sys.executable, tools / tool, 'export', '--game', game, '--items', args.items, '--out', exported]
-    if (game / 'PVZBattleforNeighborville.exe').is_file():
+    if (game / 'PVZBattleforNeighborville.exe').is_file() and tool != 'effects.py':
         if not os.environ.get('AURA_BFN_KEY'):
             raise ValueError('Battle for Neighborville needs its initfs key (add-on preferences)')
         if not args.bfn_types or not args.bfn_types.is_file():
@@ -149,7 +161,7 @@ def cosmetics_import(args, tool='cosmetics.py'):
         shutil.rmtree(textures, ignore_errors=True)
     progress('Import complete', 3)
     return {'ok': True, 'scene': str(scene), 'assets': str(assets), 'errors': len(report.get('errors', [])),
-            'meshes': report.get('meshes')}
+            'meshes': report.get('meshes'), 'effects': report.get('effects')}
 
 
 def run_import(args):
@@ -200,7 +212,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('action', choices=('discover', 'import', 'cosmetics-discover', 'cosmetics-import',
                                       'props-discover', 'props-import', 'animations-discover', 'animations-import',
-                                      'npcs-discover', 'npcs-import', 'icons'))
+                                      'npcs-discover', 'npcs-import', 'icons', 'effects-discover', 'effects-import'))
     p.add_argument('--tools', type=Path, required=True)
     p.add_argument('--game', type=Path, required=True)
     p.add_argument('--out', type=Path)
@@ -217,14 +229,16 @@ def main():
     if args.action.endswith('discover') or args.action == 'icons':
         try:
             {'discover': discover, 'cosmetics-discover': cosmetics_discover, 'props-discover': props_discover,
-             'animations-discover': animations_discover, 'npcs-discover': npcs_discover, 'icons': icons}[args.action](args)
+             'animations-discover': animations_discover, 'npcs-discover': npcs_discover, 'icons': icons,
+             'effects-discover': effects_discover}[args.action](args)
         except Exception as error:
             write_json(args.out, {'ok': False, 'error': str(error)})
             return 1
         return 0
     try:
         result = {'import': run_import, 'cosmetics-import': cosmetics_import, 'props-import': props_import,
-                  'animations-import': animations_import, 'npcs-import': npcs_import}[args.action](args)
+                  'animations-import': animations_import, 'npcs-import': npcs_import,
+                  'effects-import': effects_import}[args.action](args)
         code = 0
     except Exception as error:
         result, code = {'ok': False, 'error': str(error)}, 1

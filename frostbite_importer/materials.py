@@ -87,7 +87,11 @@ def surface_group():
     return group
 
 
-def build_material(mat, doc, image):
+def build_material(mat, doc, image, game_shaders=False):
+    if game_shaders:
+        from .game_materials import build as build_game
+        if build_game(mat, doc, image):
+            return
     params = doc.get('parameters') or [[1, 1, 1, 1], [.7, 0, 1, 0], [1, 1, 0, 0], [0, 0, 0, 0]]
     tint = [a * b for a, b in zip(params[0], doc.get('tint', [1, 1, 1, 1]))]
     surface, tiling = params[1], params[2]

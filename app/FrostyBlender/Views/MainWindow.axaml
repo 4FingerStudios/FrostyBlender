@@ -196,6 +196,19 @@
               </StackPanel>
             </Grid>
 
+            <!-- animated model -->
+            <Border DockPanel.Dock="Top" Classes="card" Padding="14" Margin="0,0,0,12" IsVisible="{Binding SelectedEntry.HasModel}">
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Spacing="2" VerticalAlignment="Center">
+                  <TextBlock Classes="eyebrow" Text="ANIMATES" />
+                  <TextBlock Text="{Binding SelectedEntry.ModelName}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding SelectedEntry.ModelHint}" Classes="muted" FontSize="11.5" TextWrapping="Wrap" />
+                </StackPanel>
+                <Button Grid.Column="1" Content="Show model" Padding="14,7" Margin="10,0,0,0" VerticalAlignment="Center"
+                        Command="{Binding ShowModelCommand}" />
+              </Grid>
+            </Border>
+
             <!-- options and send -->
             <Border DockPanel.Dock="Bottom" Classes="card" Padding="16" Margin="0,14,0,0">
               <StackPanel Spacing="12">
@@ -204,8 +217,10 @@
                   <TextBlock Text="Texture size" VerticalAlignment="Center" />
                   <ComboBox Grid.Column="1" Width="110" ItemsSource="{Binding TextureSizes}" SelectedItem="{Binding TextureSize}" />
                 </Grid>
+                <CheckBox Content="Game shaders (GW1/GW2)" IsChecked="{Binding GameShaders}" IsVisible="{Binding !IsAnimations}"
+                          ToolTip.Tip="Materials wired like the game's own shaders: ambient occlusion, smoothness, metalness, tint masks and emissive. Off: simpler default materials." />
                 <CheckBox Content="Rig to skeleton" IsChecked="{Binding Rig}" IsVisible="{Binding IsCharacterLike}" />
-                <CheckBox Content="Spawn at the 3D cursor" IsChecked="{Binding SpawnAtCursor}" IsVisible="{Binding IsNpcs}" />
+                <CheckBox Content="Spawn at the 3D cursor" IsChecked="{Binding SpawnAtCursor}" IsVisible="{Binding ShowCursorOption}" />
                 <StackPanel Spacing="8" IsVisible="{Binding IsAnimations}">
                   <TextBlock Text="Put the clips on" />
                   <ComboBox HorizontalAlignment="Stretch" ItemsSource="{Binding Armatures}" SelectedItem="{Binding Armature}" />
@@ -330,6 +345,7 @@
                 <TextBlock><Run Text="Made by " Foreground="{StaticResource Muted}" /><Run Text="4FingerStudios" FontWeight="SemiBold" /></TextBlock>
                 <TextBlock><Run Text="Plugin by " Foreground="{StaticResource Muted}" /><Run Text="Zander/SillyDev" FontWeight="SemiBold" /></TextBlock>
                 <TextBlock><Run Text="Code base by " Foreground="{StaticResource Muted}" /><Run Text="Brando/Physics" FontWeight="SemiBold" /></TextBlock>
+                <TextBlock><Run Text="Effects idea by " Foreground="{StaticResource Muted}" /><Run Text="V0e" FontWeight="SemiBold" /></TextBlock>
               </StackPanel>
               <TextBlock Classes="muted" FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap"
                          Text="Fan-made tool, not affiliated with or endorsed by Electronic Arts or PopCap. GPL-3.0-or-later." />

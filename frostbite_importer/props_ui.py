@@ -258,6 +258,7 @@ class FROSTBITE_PT_props(bpy.types.Panel):
             row.label(text='%d ticked' % ticked if ticked else 'Tick props, or import the highlighted one')
             row.operator('frostbite.props_clear', text='', icon='X')
         layout.prop(context.scene.frostbite, 'texture_size')
+        layout.prop(context.scene.frostbite, 'game_shaders')
         row = layout.row(align=True)
         row.scale_y = 1.4
         row.operator('frostbite.props_import', icon='IMPORT')

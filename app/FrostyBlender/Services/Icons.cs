@@ -55,7 +55,7 @@ public sealed class Icons
         var map = Known(game);
         var result = new Dictionary<string, string?>();
         foreach (var key in keys)
-            if (map.TryGetValue(key, out var path) && (path == null || File.Exists(path))) result[key] = path;
+            if (map.TryGetValue(key, out var path) && path != null && File.Exists(path)) result[key] = path;
         return result;
     }
 

@@ -292,6 +292,7 @@ class FROSTBITE_PT_npcs(bpy.types.Panel):
             row.label(text='%d ticked' % ticked if ticked else 'Tick items, or import the highlighted one')
             row.operator('frostbite.npcs_clear', text='', icon='X')
         layout.prop(context.scene.frostbite, 'texture_size')
+        layout.prop(context.scene.frostbite, 'game_shaders')
         layout.prop(state, 'rigged')
         layout.prop(state, 'spawn_at_cursor')
         row = layout.row(align=True)

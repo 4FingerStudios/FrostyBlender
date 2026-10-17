@@ -8,7 +8,7 @@ an import from the app behaves exactly like one from the tab.
     GET  /ping        add-on version, Blender version
     GET  /status      each tab's status line and whether an import is running
     GET  /armatures   armatures in the scene (animation targets), active one first
-    POST /import      {"kind": "maps|cosmetics|npcs|props|animations", "game": "GW1|GW2|BFN", ...}
+    POST /import      {"kind": "maps|cosmetics|npcs|props|effects|animations", "game": "GW1|GW2|BFN", ...}
 
 Requests must carry the X-FrostyBlender header and no Origin header, so a web page in a
 browser cannot drive Blender. link.json (in %LOCALAPPDATA%/FrostyBlender) tells the app the
@@ -143,7 +143,7 @@ _snapshot = {}
 
 
 def _snap():
-    from . import _job as map_job, animations_ui, cosmetics_ui, npcs_ui, props_ui
+    from . import _job as map_job, animations_ui, cosmetics_ui, effects_ui, npcs_ui, props_ui
     scene = bpy.context.scene
     if scene is None:
         return
@@ -151,6 +151,7 @@ def _snap():
             'cosmetics': (scene.frostbite_cosmetics.status, bool(cosmetics_ui._job)),
             'npcs': (scene.frostbite_npcs.status, bool(npcs_ui._job)),
             'props': (scene.frostbite_props.status, bool(props_ui._job)),
+            'effects': (scene.frostbite_effects.status, bool(effects_ui._job)),
             'animations': (scene.frostbite_animations.status, bool(animations_ui._job))}
     active = bpy.context.view_layer.objects.active if bpy.context.view_layer else None
     arms = [o for o in scene.objects if o.type == 'ARMATURE']
@@ -172,11 +173,13 @@ def _override():
 
 def _run(request):
     """Fill the request's tab and press its Import button; returns an error text or ''."""
-    from . import animations_ui, cosmetics_ui, npcs_ui, props_ui
+    from . import animations_ui, cosmetics_ui, effects_ui, npcs_ui, props_ui
     scene, kind, game = bpy.context.scene, request['kind'], request['game']
     options = request.get('options') or {}
     if options.get('texture_size') in ('512', '1024', '2048'):
         scene.frostbite.texture_size = options['texture_size']
+    if 'game_shaders' in options:
+        scene.frostbite.game_shaders = bool(options['game_shaders'])
     with bpy.context.temp_override(**_override()):
         if kind == 'maps':
             state = scene.frostbite
@@ -220,6 +223,21 @@ def _run(request):
                 for prop in state.props:
                     prop.selected = True
                 return _press(bpy.ops.frostbite.props_import)
+        if kind == 'effects':
+            if game == 'BFN':
+                return 'Effects are available for Garden Warfare 1 and 2'
+            state = scene.frostbite_effects
+            state.source = game
+            group = dict(request['group'], effects=request['items'])
+            with _injected(effects_ui, bpy.context, {'groups': [group]}):
+                entry = state.groups.add()
+                entry.name, entry.count = group['name'], len(group['effects'])
+                state.group_index = 0
+                effects_ui._fill_effects(state, bpy.context)
+                for effect in state.effects:
+                    effect.selected = True
+                state.at_cursor = bool(options.get('spawn_at_cursor', True))
+                return _press(bpy.ops.frostbite.effects_import)
         if kind == 'animations':
             state = scene.frostbite_animations
             state.source = game
@@ -241,7 +259,7 @@ def _run(request):
     return 'Unknown kind'
 
 
-KINDS = ('maps', 'cosmetics', 'npcs', 'props', 'animations')
+KINDS = ('maps', 'cosmetics', 'npcs', 'props', 'effects', 'animations')
 
 
 class _injected:

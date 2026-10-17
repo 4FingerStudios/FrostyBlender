@@ -271,6 +271,7 @@ class FROSTBITE_PT_cosmetics(bpy.types.Panel):
             row.label(text='%d ticked' % ticked if ticked else 'Tick items, or import the highlighted one')
             row.operator('frostbite.cosmetics_clear', text='', icon='X')
         layout.prop(context.scene.frostbite, 'texture_size')
+        layout.prop(context.scene.frostbite, 'game_shaders')
         layout.prop(state, 'rigged')
         row = layout.row(align=True)
         row.scale_y = 1.4

@@ -64,6 +64,10 @@ class Importer:
         self.meshes, self.materials, self.images, self.collections = {}, {}, {}, {}
         self.armatures = {}
         self.warnings = []
+        try:  # the optional game shaders (Garden Warfare 1 and 2 materials)
+            self.game_shaders = bool(bpy.context.scene.frostbite.game_shaders)
+        except AttributeError:
+            self.game_shaders = False
 
     # ---------------------------------------------------------------- assets
     def image(self, rel, non_color=False):
@@ -97,7 +101,7 @@ class Importer:
         mat['frostbite_material'] = rel or ''
         if doc.get('shader_name'):
             mat['frostbite_shader'] = doc['shader_name']
-        build_material(mat, doc, self.image)
+        build_material(mat, doc, self.image, self.game_shaders)
         self.materials[rel] = mat
         return mat
 
@@ -318,6 +322,13 @@ class Importer:
                     x, y, z = place['at']
                     ob.location = (x, -z, y)
                     root.objects.link(ob)
+                elif kind == 'frostbite_effect':
+                    from . import effects_build
+                    try:
+                        effects_build.build(self, context, place, root)
+                        count += 1
+                    except (OSError, ValueError, KeyError) as error:
+                        self.warnings.append('%s: %s' % (place.get('name'), error))
                 elif kind == 'frostbite_environment' and self.add_lighting:
                     self.environment(context, root, place.get('values', {}))
         finally:

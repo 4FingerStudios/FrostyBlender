@@ -30,12 +30,15 @@ import gw2
 from cosmetics import game_kind
 
 PORTRAITS = {
-    'gw1': ['_pvz/ui/textures/cardpacks/', '_pvz/ui/textures/cards/consumable/', '_pvz/ui/textures/cards/card_'],
+    'gw1': ['_pvz/ui/textures/cardpacks/', '_pvz/ui/textures/cards/consumable/', '_pvz/ui/textures/cards/card_',
+            '_pvz/ui/textures/cards/abilities/'],
     'gw2': ['ui/assets/charactericons/', 'ui/assets/bossheads/', 'ui/assets/hud/consumables/card_images/',
-            'ui/assets/hud/consumables/aispawner_thumbnails/'],
+            'ui/assets/hud/consumables/aispawner_thumbnails/', 'ui/assets/customization/abilities/'],
     'bfn': ['ui/textures/textureasset/characterselect/classicons/', 'ui/textures/textureasset/automatedassets/opsbosses/',
             'ui/textures/textureasset/gw2/gw2hud/consumables/',
-            'ui/textures/textureasset/automatedassets/customization/'],
+            'ui/textures/textureasset/automatedassets/customization/',
+            'ui/textures/textureasset/hud/abilityiconscircular/', 'ui/textures/textureasset/gw2/customization/abilities/',
+            'ui/textures/textureasset/gw2/abilityicons/'],
 }
 MAPS = {
     'gw1': ['_pvz/ui/assets/loadscreen_', '_pvz/ui/textures/levels/level_'],
@@ -68,6 +71,14 @@ PORTRAIT_ALIASES = {
     'browncoat': ['browncoat'], 'tvhead': ['tvhead'], 'marygold': ['marigold'], 'weedplant': ['weed'],
     'gnomebomb': ['gnome'], 'gnomegun': ['gnome'], 'gnomemallet': ['gnome'], 'gnomeshield': ['gnome'], 'gigagnome': ['gnome'],
     'mechgargantuar': ['mechgargantuar', 'gargantuar'], 'treasureyeti': ['yeti'], 'yetiimp': ['imp'],
+    # abilities: their menu icons
+    'chilibeanbomb': ['chilibomb', 'beanbomb'], 'chilibean': ['chilibean'], 'potatomine': ['potatomine', 'spudmine'],
+    'potatonuggetmine': ['nuggetmine'], 'cactusdrone': ['cactusdrone', 'garlicdrone'], 'engineer_drone': ['engineerdrone', 'abilitydrone'],
+    'engineerdrone': ['engineerdrone', 'abilitydrone'], 'ironmaiden': ['ironmaiden'], 'tallnutbattlement': ['tallnut'],
+    'tallnuts': ['tallnut'], 'tallnutcannon': ['tallnut'], 'teleporter': ['teleport', 'warp'], 'roseteleporter': ['teleport'],
+    'proximitysonicmine': ['sonicmine'], 'engineer_bullhorn_mine': ['sonicmine', 'bullhorn'], 'pirateparrot': ['pirateparrot', 'parrot'],
+    'imppunt': ['imppunt', 'puntimp'], 'scientistrevivalspring': ['healingfountain'], 'revivalspring': ['healingfountain'],
+    'boltthrower': ['boltthrower'],
 }
 ICON_SIZE = 256
 
@@ -83,7 +94,7 @@ def cache_root():
 # ---------------- the UI texture names of a game ----------------
 def ui_index(game, kind):
     """Names of the UI textures under the portrait and item folders, cached per install."""
-    key = hashlib.sha256(('%s|%s|icons4' % (Path(game).resolve(), kind)).encode()).hexdigest()[:16]
+    key = hashlib.sha256(('%s|%s|icons7' % (Path(game).resolve(), kind)).encode()).hexdigest()[:16]
     path = cache_root() / ('ui_icons_%s_%s.json' % (kind, key))
     if path.is_file():
         return json.loads(path.read_text(encoding='utf-8'))
@@ -116,27 +127,45 @@ def _leaf(name):
 
 
 def portrait(names, kind, character_id, character_name=''):
+    """The menu art for a character, NPC or ability. First pass: names that start or end with the character's
+    id or alias, folder by folder (GW2's character icons must start with it: 'imp_default', not 'chomper_yeti').
+    Ability icon folders only count on this pass, and only for names of six letters or more, so a hero's
+    ability icon never stands in for a character. Second pass: names that merely contain the id."""
     keys = {k for k in (norm(character_id), norm(character_name)) if len(k) >= 3}
-    keys |= {k[:-6] for k in keys if k.endswith('zombie') and len(k) > 9}  # GW1: browncoatzombie -> browncoat
+    keys |= {k[:-6] for k in keys if k.endswith('zombie') and len(k) >= 11}  # GW1: browncoatzombie -> browncoat
     aliases = {norm(a) for a in PORTRAIT_ALIASES.get(character_id.lower(), [])}
-    for prefix in PORTRAITS[kind]:
+
+    def candidates(prefix, test):
         found = []
         for name in names:
             if not name.startswith(prefix):
                 continue
             leaf = _leaf(name)
             if prefix.endswith('/customization/'):  # BFN: a hero's default skin icon
-                if not any(leaf.startswith('icon_%s_skin_default' % k) for k in (character_id.lower(), norm(character_id))):
-                    continue
-            elif not any(k in norm(leaf) for k in keys):
-                continue
-            found.append(name)
-        if not found and aliases and not prefix.endswith('/customization/'):
-            found = [n for n in names if n.startswith(prefix) and any(a in norm(_leaf(n)) for a in aliases)]
-        if found:
-            found.sort(key=lambda n: ('default' not in _leaf(n), 'large' not in _leaf(n) and 'lrg' not in _leaf(n),
-                                      len(_leaf(n)), n))
-            return found[0]
+                if any(leaf.startswith('icon_%s_skin_default' % k) for k in (character_id.lower(), norm(character_id))):
+                    found.append(name)
+            elif test(prefix, norm(leaf)):
+                found.append(name)
+        found.sort(key=lambda n: ('default' not in _leaf(n), 'large' not in _leaf(n) and 'lrg' not in _leaf(n), len(_leaf(n)), n))
+        return found
+
+    def strict(prefix, leaf):
+        if 'abilit' in prefix:
+            return any(leaf.endswith(k) for k in keys | aliases if len(k) >= 6)
+        if prefix.endswith('/charactericons/'):
+            return any(leaf.startswith(k) for k in keys | aliases)
+        return any(leaf.startswith(k) or leaf.endswith(k) for k in keys | aliases)
+
+    def loose(prefix, leaf):
+        if 'abilit' in prefix:
+            return False
+        return any(k in leaf for k in keys) or any(a in leaf for a in aliases if len(a) >= 6)
+
+    for test in (strict, loose):
+        for prefix in PORTRAITS[kind]:
+            found = candidates(prefix, test)
+            if found:
+                return found[0]
     return None
 
 

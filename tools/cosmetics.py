@@ -86,6 +86,8 @@ def pick_skeleton(names, character, root=None):
     then <character>_skeleton or <character>_default_skeleton, then the shortest path."""
     found = [n for n in names if n.lower().endswith('skeleton') and '/%s/' % character in n.lower()
              and 'master' not in n.lower().rsplit('/', 1)[-1]]
+    if not found:  # only a master skeleton ships for some (the Tall-nut, BFN's Potato Mine)
+        found = [n for n in names if n.lower().endswith('skeleton') and '/%s/' % character in n.lower()]
     preferred = ('%s_skeleton' % character, '%s_default_skeleton' % character)
     found.sort(key=lambda n: (bool(root) and not n.lower().startswith(root + '/'),
                               n.lower().rsplit('/', 1)[-1] not in preferred, len(n), n))
@@ -129,9 +131,50 @@ def gw_skeletons(game, output, inventory, characters):
 
 
 def bundle_root(bundle):
-    """Win32/GW2_Characters/... -> gw2_characters; Win32/characters_cu3/... -> characters."""
+    """Win32/GW2_Characters/... -> gw2_characters; Win32/characters_cu3/... -> characters. An item given by
+    mesh name ('asset:gw2_characters/...') takes the mesh's top folder."""
+    if bundle.lower().startswith('asset:'):
+        return re.sub(r'_cu\d+$', '', bundle[6:].lower().split('/')[0])
     parts = bundle.lower().split('/')
     return re.sub(r'_cu\d+$', '', parts[1]) if len(parts) > 2 else None
+
+
+def variation_index(game, kind):
+    """Mesh GUID -> the MeshVariationDatabases that list it, cached per install. Meshes exported by name
+    (abilities and other skeleton-only characters) get their textures from these, not from a bundle."""
+    import hashlib
+    key = hashlib.sha256(('%s|%s|variations1' % (Path(game).resolve(), kind)).encode()).hexdigest()[:16]
+    base = Path(os.environ.get('AURA_IMPORT_CACHE') or Path(os.environ.get('LOCALAPPDATA') or Path.home()) / 'aura-frostbite')
+    path = base / ('variations_%s_%s.json' % (kind, key))
+    if path.is_file():
+        return json.loads(path.read_text(encoding='utf-8'))
+    index = gw2.cached_dependency_index(Path(game))
+    out = {}
+    for location in index['ebx'].values():
+        name = location[3]['name']
+        if 'meshvariationdb' not in name.lower():
+            continue
+        file, offset, size, source = location
+        try:
+            with file.open('rb') as stream:
+                stream.seek(offset)
+                content = gw2.decompress(gw2.Reader(stream.read(size)), source['original_size'])
+            imports = {i['file'] for i in gw2.Ebx(content).document()['imports']}
+        except (ValueError, OSError, struct.error, IndexError):
+            continue
+        for guid in imports:
+            out.setdefault(guid, []).append(name)
+    for guid, names in out.items():  # the ability's own weapon table first, then the smallest
+        names.sort(key=lambda n: ('/weapons/' not in n.lower(), len(n)))
+        del names[3:]
+    base.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out), encoding='utf-8')
+    return out
+
+
+def _asset_items(items):
+    """Items that name a mesh EBX instead of an unlock bundle (abilities, skeleton-only characters)."""
+    return [i for i in items if i.get('asset') and i.get('bundle', '').lower().startswith('asset:')]
 
 
 def bfn_skeletons(game, characters):
@@ -233,7 +276,56 @@ def gw_export(game, kind, items, output):
     inventory = {'profile': kind, 'game': str(game), 'package': 'cosmetics', 'assets': [], 'errors': [],
                  'archive_policy': 'base-and-installed-patch'}
     seen = set()
+    by_name = None
+    asset_meshes = set()
+    for item in _asset_items(items):
+        if by_name is None:
+            by_name = {loc[3]['name'].lower(): loc for loc in gw2.cached_dependency_index(game)['ebx'].values()}
+        location = by_name.get(item['asset'].lower())
+        if location is None:
+            inventory['errors'].append({'name': item['asset'], 'stage': 'ebx', 'error': 'Not in the shared index'})
+            continue
+        path, offset, size, source = location
+        try:
+            with path.open('rb') as stream:
+                stream.seek(offset)
+                content = gw2.decompress(gw2.Reader(stream.read(size)), source['original_size'])
+            document = gw2.Ebx(content).document()
+        except (ValueError, OSError, struct.error, IndexError) as error:
+            inventory['errors'].append({'name': item['asset'], 'stage': 'ebx', 'error': str(error)})
+            continue
+        entry = dict(source, path='ebx/%s.bin' % source['sha1'], document='ebx/%s.json' % source['sha1'],
+                     bytes=len(content), root_type=document['root_type'], guid=document['guid'], bundle=item['bundle'])
+        (output / entry['path']).parent.mkdir(parents=True, exist_ok=True)
+        (output / entry['path']).write_bytes(content)
+        (output / entry['document']).write_text(json.dumps(document), encoding='utf-8')
+        inventory['assets'].append(entry)
+        seen.add(('ebx', source.get('guid', source['name'])))
+        asset_meshes.add(document['guid'])
+        print('Mesh:', item['asset'], flush=True)
+    if asset_meshes:
+        from props import _trim_variations
+        tables = variation_index(game, kind)
+        for name in sorted({n for g in asset_meshes for n in tables.get(g, [])[:1]}):
+            location = by_name.get(name.lower())
+            if location is None:
+                continue
+            path, offset, size, source = location
+            with path.open('rb') as stream:
+                stream.seek(offset)
+                content = gw2.decompress(gw2.Reader(stream.read(size)), source['original_size'])
+            document = gw2.Ebx(content).document()
+            if not _trim_variations(document, asset_meshes):
+                continue
+            entry = dict(source, path='ebx/%s.bin' % source['sha1'], document='ebx/%s.json' % source['sha1'],
+                         bytes=len(content), root_type=document['root_type'], guid=document['guid'])
+            (output / entry['path']).write_bytes(content)
+            (output / entry['document']).write_text(json.dumps(document), encoding='utf-8')
+            inventory['assets'].append(entry)
+            print('Variations:', name, flush=True)
     for item in items:
+        if item in _asset_items(items):
+            continue
         try:
             raw, decoded = gw_bundle(game, item['sb'], item['bundle'])
             assets, r = gw2.bundle(raw)
@@ -289,9 +381,15 @@ def export(game, items, output, names=None):
             raise ValueError('Battle for Neighborville needs its type name table (--names)')
         skeletons = bfn_skeletons(game, {item_character(kind, i): bundle_root(i['bundle']) for i in items
                                          if item_character(kind, i)})
+        by_asset = _asset_items(items)
         inventory = bfn.export(game, 'cosmetics', output, bfn.key_from(None), names,
-                               int(os.environ.get('AURA_IMPORT_JOBS', '4')), bundles=[i['bundle'] for i in items],
-                               extra_ebx=sorted({n for found in skeletons.values() for n in found}))
+                               int(os.environ.get('AURA_IMPORT_JOBS', '4')),
+                               bundles=[i['bundle'] for i in items if i not in by_asset],
+                               extra_ebx=sorted({n for found in skeletons.values() for n in found} | {i['asset'] for i in by_asset}))
+        wanted = {i['asset'].lower(): i['bundle'] for i in by_asset}
+        for a in inventory['assets']:
+            if a.get('kind') == 'ebx' and a.get('name', '').lower() in wanted:
+                a['bundle'] = wanted[a['name'].lower()]
         have = {a['name'].lower() for a in inventory['assets'] if a.get('root_type') == 'SkeletonAsset'}
         options = {c: [n for n in found if n.lower() in have] for c, found in skeletons.items()}
         inventory['skeleton_options'] = {c: found for c, found in options.items() if found}

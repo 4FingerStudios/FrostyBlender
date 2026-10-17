@@ -109,11 +109,24 @@ def clean(name):
     return re.sub(r'\s+Anim$', '', name or '')
 
 
+def with_models(result):
+    """Name, per animated rig, the importable model it animates (rig_models.json: matched by bone names)."""
+    try:
+        table = json.loads((Path(__file__).with_name('rig_models.json')).read_text(encoding='utf-8')).get(result['game'], {})
+    except (OSError, ValueError):
+        table = {}
+    for c in result['characters']:
+        model = table.get(c['rig'])
+        if model:
+            c['model'] = {k: model[k] for k in ('section', 'id', 'name')}
+    return result
+
+
 def discover(game):
     kind = game_kind(game)
     index = cache_dir(game, kind) / 'clips.json'
     if index.is_file():
-        return json.loads(index.read_text(encoding='utf-8'))
+        return with_models(json.loads(index.read_text(encoding='utf-8')))
     db = load(game, kind)
     characters = {}
     for anim in db.animations():
@@ -133,7 +146,7 @@ def discover(game):
     for c in result['characters']:
         c['clips'].sort(key=lambda x: x['name'].lower())
     index.write_text(json.dumps(result), encoding='utf-8')
-    return result
+    return with_models(result)
 
 
 def export(game, items, out):

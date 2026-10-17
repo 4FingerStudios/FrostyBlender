@@ -59,6 +59,7 @@ public partial class MainViewModel : ObservableObject
         new NavItem(Section.Characters, "Characters", "\uE77B"),
         new NavItem(Section.Npcs, "NPCs", "\uE99A"),
         new NavItem(Section.Props, "Props", "\uE7B8"),
+        new NavItem(Section.Effects, "Effects", "\uE945"),
         new NavItem(Section.Animations, "Animations", "\uE714"),
         new NavItem(Section.Settings, "Settings", "\uE713"),
     };
@@ -86,6 +87,7 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _sending;
     [ObservableProperty] private string _textureSize = "1024";
     [ObservableProperty] private bool _rig = true;
+    [ObservableProperty] private bool _gameShaders;
     [ObservableProperty] private bool _spawnAtCursor = true;
     [ObservableProperty] private bool _setFps = true;
     [ObservableProperty] private bool _hideAdditive = true;
@@ -98,6 +100,7 @@ public partial class MainViewModel : ObservableObject
     public bool HasItems => Section is not Section.Maps;
     public bool IsCharacterLike => Section is Section.Characters or Section.Npcs;
     public bool IsNpcs => Section == Section.Npcs;
+    public bool ShowCursorOption => Section is Section.Npcs or Section.Effects;
     public bool IsAnimations => Section == Section.Animations;
     public bool HasSelection => SelectedEntry != null;
     public bool ShowPreview => SelectedEntry is { Wide: true, HasIcon: true };
@@ -108,8 +111,9 @@ public partial class MainViewModel : ObservableObject
     {
         Section.Maps => "Whole levels, terrain and all, straight into Blender.",
         Section.Characters => "Heroes and every hat, head and accessory they own.",
-        Section.Npcs => "Horde, bosses, turrets and vehicles, ready to spawn.",
+        Section.Npcs => "Horde, bosses, turrets, vehicles and abilities like the Chili Bean bomb.",
         Section.Props => "Single props and buildings, picked from any map.",
+        Section.Effects => "Explosions, smoke and sparks that play in Blender.",
         Section.Animations => "Game animation clips for the characters you imported.",
         _ => "",
     };
@@ -117,6 +121,7 @@ public partial class MainViewModel : ObservableObject
     {
         Section.Maps or Section.Props => Entries.Count == 1 ? "map" : "maps",
         Section.Npcs => Entries.Count == 1 ? "NPC" : "NPCs",
+        Section.Effects => Entries.Count == 1 ? "group" : "groups",
         _ => Entries.Count == 1 ? "character" : "characters",
     };
     public string SendText => Section switch
@@ -128,6 +133,7 @@ public partial class MainViewModel : ObservableObject
     public string ItemsHeader => Section switch
     {
         Section.Props => "PROPS",
+        Section.Effects => "EFFECTS",
         Section.Animations => "CLIPS",
         _ => "ITEMS",
     };
@@ -135,8 +141,9 @@ public partial class MainViewModel : ObservableObject
     {
         Section.Maps => "Big maps take a few minutes. Blender stays usable while they convert.",
         Section.Characters => "Tick a body, head and props. Pieces added later join the same rig.",
-        Section.Npcs => "Tick a body, then costumes, props, weapons or abilities.",
+        Section.Npcs => "Tick a body, then costumes, props, weapons or abilities. Ability objects come rigged, ready for their animations.",
         Section.Props => "Props come in a row along X, each in its own collection.",
+        Section.Effects => "Effects play from frame 1 with Geometry Nodes; press play in Blender. Quads face the scene camera.",
         Section.Animations => "Import the character first, then send its clips.",
         _ => "",
     };
@@ -149,7 +156,7 @@ public partial class MainViewModel : ObservableObject
     partial void OnSelectedNavChanged(NavItem value)
     {
         foreach (var name in new[] { nameof(Section), nameof(IsBrowser), nameof(IsSettings), nameof(HasItems),
-                     nameof(IsCharacterLike), nameof(IsNpcs), nameof(IsAnimations), nameof(SectionTitle), nameof(SectionBlurb),
+                     nameof(IsCharacterLike), nameof(IsNpcs), nameof(ShowCursorOption), nameof(IsAnimations), nameof(SectionTitle), nameof(SectionBlurb),
                      nameof(SendText), nameof(ItemsHeader), nameof(Hint) })
             OnPropertyChanged(name);
         if (IsBrowser) _ = Scan(false);
@@ -183,6 +190,16 @@ public partial class MainViewModel : ObservableObject
 
     [RelayCommand]
     private async Task Refresh() => await Scan(true);
+
+    /// <summary>Jump from an animated rig to the model it animates, selected in its own section.</summary>
+    [RelayCommand]
+    private void ShowModel()
+    {
+        if (SelectedEntry is not { HasModel: true } entry) return;
+        var section = entry.ModelSection == "Characters" ? Section.Characters : Section.Npcs;
+        _startSelect = entry.ModelId;
+        SelectedNav = Nav.First(n => n.Section == section);
+    }
 
     [RelayCommand]
     private async Task Retry()
@@ -343,6 +360,23 @@ public partial class MainViewModel : ObservableObject
                     });
                 }
                 break;
+            case Section.Effects:
+                foreach (var group in result["groups"]?.AsArray() ?? new JsonArray())
+                {
+                    var node = group!.AsObject();
+                    var name = Str(node, "name");
+                    var items = (node["effects"]?.AsArray() ?? new JsonArray())
+                        .Select(e => new Item { Name = Str(e, "name"), Group = EffectGroup(Str(e, "asset")), Node = e!.AsObject() })
+                        .OrderBy(i => i.Group).ThenBy(i => i.Name).ToList();
+                    var parts = name.Split('/');
+                    list.Add(new Entry
+                    {
+                        Title = Title(parts[^1]), Subtitle = Count(items.Count, "effect"), Badge = parts.Length > 1 ? Title(parts[0]) : "",
+                        Accent = Palette.Effects, Node = node, Items = items,
+                        Search = (name + " " + string.Join(' ', items.Select(i => i.Name))).ToLowerInvariant(),
+                    });
+                }
+                break;
             case Section.Animations:
                 foreach (var character in result["characters"]?.AsArray() ?? new JsonArray())
                 {
@@ -358,12 +392,21 @@ public partial class MainViewModel : ObservableObject
                     {
                         Title = name, Subtitle = Count(items.Count, "clip"), Badge = Str(node, "rig"), Accent = Palette.Team(team),
                         IconId = RigIconId(name),
+                        ModelName = Str(node["model"], "name"), ModelId = Str(node["model"], "id"),
+                        ModelSection = Str(node["model"], "section"),
                         Node = node, Items = items, Search = (name + " " + Str(node, "rig")).ToLowerInvariant(),
                     });
                 }
                 break;
         }
         return list;
+    }
+
+    /// <summary>fx/plants/peashooter/chilibeanbomb/fx_... -> Chilibeanbomb (the folder the effect sits in).</summary>
+    private static string EffectGroup(string asset)
+    {
+        var parts = asset.Split('/');
+        return parts.Length > 1 ? Title(parts[^2]) : "Effects";
     }
 
     /// <summary>Peashooter_Gesture_Dance -> Gesture; additive layers get their own group.</summary>
@@ -388,12 +431,12 @@ public partial class MainViewModel : ObservableObject
             JobStatus = "Tick at least one item first.";
             return;
         }
-        var options = new JsonObject { ["texture_size"] = TextureSize, ["rig"] = Rig, ["spawn_at_cursor"] = SpawnAtCursor, ["set_fps"] = SetFps };
+        var options = new JsonObject { ["texture_size"] = TextureSize, ["rig"] = Rig, ["spawn_at_cursor"] = SpawnAtCursor, ["set_fps"] = SetFps, ["game_shaders"] = GameShaders };
         if (Section == Section.Animations && Armature != ActiveArmature) options["armature"] = Armature;
         var kind = Section switch
         {
             Section.Maps => "maps", Section.Characters => "cosmetics", Section.Npcs => "npcs",
-            Section.Props => "props", _ => "animations",
+            Section.Props => "props", Section.Effects => "effects", _ => "animations",
         };
         var body = new JsonObject { ["kind"] = kind, ["game"] = Game, ["options"] = options };
         var node = entry.Node;
@@ -421,6 +464,10 @@ public partial class MainViewModel : ObservableObject
                     ["name"] = Str(node, "name"), ["package"] = Str(node, "package"),
                     ["variation_dbs"] = node["variation_dbs"]?.DeepClone() ?? new JsonArray(),
                 };
+                body["items"] = new JsonArray(chosen.Select(i => (JsonNode)i.Node.DeepClone()).ToArray());
+                break;
+            case Section.Effects:
+                body["group"] = new JsonObject { ["name"] = Str(node, "name") };
                 body["items"] = new JsonArray(chosen.Select(i => (JsonNode)i.Node.DeepClone()).ToArray());
                 break;
             case Section.Animations:
@@ -463,7 +510,7 @@ public partial class MainViewModel : ObservableObject
 
     private async Task LoadPortraits(Section section, string game, List<Entry> entries)
     {
-        if (section == Section.Settings || entries.Count == 0) return;
+        if (section is Section.Settings or Section.Effects || entries.Count == 0) return;
         if (_icons.Problem is { } problem)
         {
             JobStatus = problem;

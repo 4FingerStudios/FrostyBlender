@@ -1,0 +1,1334 @@
+{
+ "bfn": {
+  "Rig_AI_Cactus_Drone": {
+   "cover": 0.87,
+   "id": "cactusdrone",
+   "name": "Cactusdrone",
+   "section": "NPCs"
+  },
+  "Rig_AI_ChiliBean": {
+   "cover": 1.0,
+   "id": "chilibeanbomb",
+   "name": "Chilibeanbomb",
+   "section": "NPCs"
+  },
+  "Rig_AI_Gargantuan": {
+   "cover": 0.98,
+   "id": "gargantuar",
+   "name": "Gargantuar",
+   "section": "NPCs"
+  },
+  "Rig_AI_GargantuanIMP": {
+   "cover": 1.0,
+   "id": "imp",
+   "name": "Imp",
+   "section": "Characters"
+  },
+  "Rig_AI_PotatoMine": {
+   "cover": 1.0,
+   "id": "potatomine",
+   "name": "Potatomine",
+   "section": "NPCs"
+  },
+  "Rig_AI_Spikeweed": {
+   "cover": 1.0,
+   "id": "spikeweed",
+   "name": "Spikeweed",
+   "section": "NPCs"
+  },
+  "Rig_AI_TallNut_Four": {
+   "cover": 1.0,
+   "id": "tallnutbattlement",
+   "name": "Tallnutbattlement",
+   "section": "NPCs"
+  },
+  "Rig_Gnight_ShredderTop": {
+   "cover": 1.0,
+   "id": "gnight",
+   "name": "Gnight",
+   "section": "NPCs"
+  },
+  "Rig_GnomeGnight": {
+   "cover": 0.98,
+   "id": "gnome",
+   "name": "Gnome",
+   "section": "NPCs"
+  },
+  "Rig_PT_Bamboo": {
+   "cover": 1.0,
+   "id": "bambooshoot",
+   "name": "Bambooshoot",
+   "section": "NPCs"
+  },
+  "Rig_PT_BonkChoy": {
+   "cover": 1.0,
+   "id": "bonkchoy",
+   "name": "Bonkchoy",
+   "section": "NPCs"
+  },
+  "Rig_PT_DaisyTurret": {
+   "cover": 1.0,
+   "id": "sunflowerturret",
+   "name": "Sunflowerturret",
+   "section": "NPCs"
+  },
+  "Rig_PT_DoomShroom": {
+   "cover": 1.0,
+   "id": "doomshroom",
+   "name": "Doomshroom",
+   "section": "NPCs"
+  },
+  "Rig_PT_Fume_Shroom": {
+   "cover": 1.0,
+   "id": "fumeshroom",
+   "name": "Fumeshroom",
+   "section": "NPCs"
+  },
+  "Rig_PT_LightningReed": {
+   "cover": 1.0,
+   "id": "lightningreed",
+   "name": "Lightningreed",
+   "section": "NPCs"
+  },
+  "Rig_PT_PeaCannon": {
+   "cover": 1.0,
+   "id": "peacannon",
+   "name": "Peacannon",
+   "section": "NPCs"
+  },
+  "Rig_PT_PeaGatling": {
+   "cover": 1.0,
+   "id": "peagatling",
+   "name": "Peagatling",
+   "section": "NPCs"
+  },
+  "Rig_PT_RoseTurret": {
+   "cover": 1.0,
+   "id": "roseturret",
+   "name": "Roseturret",
+   "section": "NPCs"
+  },
+  "Rig_PT_Scaredy_shroom": {
+   "cover": 1.0,
+   "id": "scaredyshroom",
+   "name": "Scaredyshroom",
+   "section": "NPCs"
+  },
+  "Rig_PT_SnapDragon": {
+   "cover": 1.0,
+   "id": "snapdragon",
+   "name": "Snapdragon",
+   "section": "Characters"
+  },
+  "Rig_P_Acorn_GW3": {
+   "cover": 0.98,
+   "id": "acorn",
+   "name": "Acorn",
+   "section": "Characters"
+  },
+  "Rig_P_AssaultCorn_GW3": {
+   "cover": 0.99,
+   "id": "assaultcorn",
+   "name": "Assaultcorn",
+   "section": "Characters"
+  },
+  "Rig_P_Cactus_GW3": {
+   "cover": 0.97,
+   "id": "cactus",
+   "name": "Cactus",
+   "section": "Characters"
+  },
+  "Rig_P_Chomper_GW3": {
+   "cover": 0.98,
+   "id": "chomper",
+   "name": "Chomper",
+   "section": "Characters"
+  },
+  "Rig_P_Citron_GW3": {
+   "cover": 0.99,
+   "id": "citron",
+   "name": "Citron",
+   "section": "Characters"
+  },
+  "Rig_P_Dandelion": {
+   "cover": 1.0,
+   "id": "dandelion",
+   "name": "Dandelion",
+   "section": "NPCs"
+  },
+  "Rig_P_Dreadroot": {
+   "cover": 1.0,
+   "id": "dreadroot",
+   "name": "Dreadroot",
+   "section": "NPCs"
+  },
+  "Rig_P_Dreadwood": {
+   "cover": 1.0,
+   "id": "dreadwood",
+   "name": "Dreadwood",
+   "section": "NPCs"
+  },
+  "Rig_P_DreadwoodWashingMachine": {
+   "cover": 0.81,
+   "id": "washingmachine",
+   "name": "Washingmachine",
+   "section": "NPCs"
+  },
+  "Rig_P_GiantNightCap": {
+   "cover": 0.98,
+   "id": "giantnightcap",
+   "name": "Giantnightcap",
+   "section": "NPCs"
+  },
+  "Rig_P_GigaSquash": {
+   "cover": 1.0,
+   "id": "squash",
+   "name": "Squash",
+   "section": "NPCs"
+  },
+  "Rig_P_Gnome": {
+   "cover": 1.0,
+   "id": "sculptorgnome",
+   "name": "Sculptorgnome",
+   "section": "NPCs"
+  },
+  "Rig_P_GnomeKing": {
+   "cover": 1.0,
+   "id": "gnomeking",
+   "name": "Gnomeking",
+   "section": "NPCs"
+  },
+  "Rig_P_HypnoShroom": {
+   "cover": 1.0,
+   "id": "hypnoshroom",
+   "name": "Hypnoshroom",
+   "section": "NPCs"
+  },
+  "Rig_P_IceburgLettuce": {
+   "cover": 1.0,
+   "id": "iceplant",
+   "name": "Iceplant",
+   "section": "Characters"
+  },
+  "Rig_P_Lawnmower": {
+   "cover": 1.0,
+   "id": "lawnmower",
+   "name": "Lawnmower",
+   "section": "Characters"
+  },
+  "Rig_P_MaryGold": {
+   "cover": 1.0,
+   "id": "marygold",
+   "name": "Marygold",
+   "section": "NPCs"
+  },
+  "Rig_P_Mushroom": {
+   "cover": 0.97,
+   "id": "mushroom",
+   "name": "Mushroom",
+   "section": "Characters"
+  },
+  "Rig_P_Oak": {
+   "cover": 0.98,
+   "id": "oak",
+   "name": "Oak",
+   "section": "Characters"
+  },
+  "Rig_P_PeaShooter_GW3": {
+   "cover": 0.98,
+   "id": "peashooter",
+   "name": "Peashooter",
+   "section": "Characters"
+  },
+  "Rig_P_Rose_GW3": {
+   "cover": 1.0,
+   "id": "rose",
+   "name": "Rose",
+   "section": "Characters"
+  },
+  "Rig_P_SnapDragon": {
+   "cover": 0.99,
+   "id": "snapdragon",
+   "name": "Snapdragon",
+   "section": "Characters"
+  },
+  "Rig_P_SunflowerQueen": {
+   "cover": 1.0,
+   "id": "sunflowerqueen",
+   "name": "Sunflowerqueen",
+   "section": "NPCs"
+  },
+  "Rig_P_Sunflower_GW3": {
+   "cover": 0.99,
+   "id": "sunflower",
+   "name": "Sunflower",
+   "section": "Characters"
+  },
+  "Rig_P_SuperBean": {
+   "cover": 1.0,
+   "id": "superbean",
+   "name": "Superbean",
+   "section": "NPCs"
+  },
+  "Rig_P_Torchwood": {
+   "cover": 1.0,
+   "id": "torchwood",
+   "name": "Torchwood",
+   "section": "NPCs"
+  },
+  "Rig_P_ToxicPickle": {
+   "cover": 0.95,
+   "id": "toxicpickle",
+   "name": "Toxicpickle",
+   "section": "NPCs"
+  },
+  "Rig_P_Weed": {
+   "cover": 1.0,
+   "id": "weedplant",
+   "name": "Weedplant",
+   "section": "NPCs"
+  },
+  "Rig_P_WeedGrunt": {
+   "cover": 0.97,
+   "id": "wildflowergrunt",
+   "name": "Wildflowergrunt",
+   "section": "NPCs"
+  },
+  "Rig_SimpleObject_RevivalSpring": {
+   "cover": 1.0,
+   "id": "revivalspring",
+   "name": "Revivalspring",
+   "section": "NPCs"
+  },
+  "Rig_ZT_ArmorBreaker": {
+   "cover": 1.0,
+   "id": "armorbreaker",
+   "name": "Armorbreaker",
+   "section": "NPCs"
+  },
+  "Rig_ZT_BoxerBot": {
+   "cover": 1.0,
+   "id": "boxerbot",
+   "name": "Boxerbot",
+   "section": "NPCs"
+  },
+  "Rig_ZT_Engineer_Turret1": {
+   "cover": 1.0,
+   "id": "engineerturret01",
+   "name": "Engineerturret01",
+   "section": "NPCs"
+  },
+  "Rig_ZT_Engineer_Turret2": {
+   "cover": 1.0,
+   "id": "engineerturret02",
+   "name": "Engineerturret02",
+   "section": "NPCs"
+  },
+  "Rig_ZT_Engineer_Turret3": {
+   "cover": 1.0,
+   "id": "engineerturret03",
+   "name": "Engineerturret03",
+   "section": "NPCs"
+  },
+  "Rig_ZT_Engineer_Turret4": {
+   "cover": 1.0,
+   "id": "engineerturret04",
+   "name": "Engineerturret04",
+   "section": "NPCs"
+  },
+  "Rig_ZT_ExplodyTurret": {
+   "cover": 1.0,
+   "id": "explodyturret",
+   "name": "Explodyturret",
+   "section": "NPCs"
+  },
+  "Rig_ZT_FlameThrower": {
+   "cover": 0.96,
+   "id": "explodyturret",
+   "name": "Explodyturret",
+   "section": "NPCs"
+  },
+  "Rig_ZT_HealStation": {
+   "cover": 1.0,
+   "id": "healstation",
+   "name": "Healstation",
+   "section": "NPCs"
+  },
+  "Rig_ZT_LaserTurret": {
+   "cover": 1.0,
+   "id": "laserturret",
+   "name": "Laserturret",
+   "section": "NPCs"
+  },
+  "Rig_ZT_LightningRod": {
+   "cover": 1.0,
+   "id": "lightningrod",
+   "name": "Lightningrod",
+   "section": "NPCs"
+  },
+  "Rig_ZT_OrbitalSatellite": {
+   "cover": 1.0,
+   "id": "orbitalsatellite",
+   "name": "Orbitalsatellite",
+   "section": "NPCs"
+  },
+  "Rig_ZT_RocketTurret": {
+   "cover": 1.0,
+   "id": "rocketturret",
+   "name": "Rocketturret",
+   "section": "NPCs"
+  },
+  "Rig_ZT_SniperTurret": {
+   "cover": 1.0,
+   "id": "sniperturret",
+   "name": "Sniperturret",
+   "section": "NPCs"
+  },
+  "Rig_ZT_SnowMachine": {
+   "cover": 1.0,
+   "id": "snowmachine",
+   "name": "Snowmachine",
+   "section": "NPCs"
+  },
+  "Rig_ZT_StunTurret": {
+   "cover": 1.0,
+   "id": "stunturret",
+   "name": "Stunturret",
+   "section": "NPCs"
+  },
+  "Rig_ZT_Toxic": {
+   "cover": 1.0,
+   "id": "toxic",
+   "name": "Toxic",
+   "section": "NPCs"
+  },
+  "Rig_ZV_BoltThrower": {
+   "cover": 0.89,
+   "id": "boltthrower",
+   "name": "Boltthrower",
+   "section": "NPCs"
+  },
+  "Rig_ZV_ImpMech": {
+   "cover": 0.97,
+   "id": "impmech",
+   "name": "Impmech",
+   "section": "Characters"
+  },
+  "Rig_ZV_Parrot": {
+   "cover": 1.0,
+   "id": "flyingminer",
+   "name": "Flyingminer",
+   "section": "NPCs"
+  },
+  "Rig_Z_ActionHero": {
+   "cover": 0.99,
+   "id": "actionhero",
+   "name": "Actionhero",
+   "section": "Characters"
+  },
+  "Rig_Z_Allstar_GW3": {
+   "cover": 0.97,
+   "id": "allstar",
+   "name": "Allstar",
+   "section": "Characters"
+  },
+  "Rig_Z_Astronaut": {
+   "cover": 0.99,
+   "id": "astronaut",
+   "name": "Astronaut",
+   "section": "Characters"
+  },
+  "Rig_Z_AstronautBase": {
+   "cover": 1.0,
+   "id": "astronaut",
+   "name": "Astronaut",
+   "section": "Characters"
+  },
+  "Rig_Z_BouncerBot": {
+   "cover": 1.0,
+   "id": "bouncerbot",
+   "name": "Bouncerbot",
+   "section": "NPCs"
+  },
+  "Rig_Z_BrownCoat": {
+   "cover": 0.99,
+   "id": "browncoat",
+   "name": "Browncoat",
+   "section": "NPCs"
+  },
+  "Rig_Z_CheeseMineBoss": {
+   "cover": 1.0,
+   "id": "cheesemineboss",
+   "name": "Cheesemineboss",
+   "section": "NPCs"
+  },
+  "Rig_Z_Electric": {
+   "cover": 0.99,
+   "id": "electric",
+   "name": "Electric",
+   "section": "Characters"
+  },
+  "Rig_Z_Engineer_GW3": {
+   "cover": 0.99,
+   "id": "engineer",
+   "name": "Engineer",
+   "section": "Characters"
+  },
+  "Rig_Z_FlyingMiner_GW3": {
+   "cover": 1.0,
+   "id": "flyingminer",
+   "name": "Flyingminer",
+   "section": "NPCs"
+  },
+  "Rig_Z_Goat": {
+   "cover": 0.97,
+   "id": "goat",
+   "name": "Goat",
+   "section": "Characters"
+  },
+  "Rig_Z_ImpMech_GW3": {
+   "cover": 0.97,
+   "id": "impmech",
+   "name": "Impmech",
+   "section": "Characters"
+  },
+  "Rig_Z_Imp_GW3": {
+   "cover": 0.97,
+   "id": "imp",
+   "name": "Imp",
+   "section": "Characters"
+  },
+  "Rig_Z_MechZombie": {
+   "cover": 1.0,
+   "id": "mechgargantuar",
+   "name": "Mechgargantuar",
+   "section": "NPCs"
+  },
+  "Rig_Z_Pirate_GW3": {
+   "cover": 0.99,
+   "id": "pirate",
+   "name": "Pirate",
+   "section": "Characters"
+  },
+  "Rig_Z_RoboZombie": {
+   "cover": 1.0,
+   "id": "robozombie",
+   "name": "Robozombie",
+   "section": "NPCs"
+  },
+  "Rig_Z_Scientist_GW3": {
+   "cover": 0.98,
+   "id": "scientist",
+   "name": "Scientist",
+   "section": "Characters"
+  },
+  "Rig_Z_Soldier_GW3": {
+   "cover": 0.99,
+   "id": "soldier",
+   "name": "Soldier",
+   "section": "Characters"
+  },
+  "Rig_Z_Superhero_GW3": {
+   "cover": 0.99,
+   "id": "superhero",
+   "name": "Superhero",
+   "section": "Characters"
+  },
+  "Rig_Z_UberDiscoDJ": {
+   "cover": 1.0,
+   "id": "uberdiscodj",
+   "name": "Uberdiscodj",
+   "section": "NPCs"
+  },
+  "Rig_Z_Wizard_GW3": {
+   "cover": 0.99,
+   "id": "wizard",
+   "name": "Wizard",
+   "section": "Characters"
+  },
+  "Rig_Z_Yeti": {
+   "cover": 1.0,
+   "id": "yeti",
+   "name": "Yeti",
+   "section": "NPCs"
+  },
+  "Rig_Z_ZenSensei": {
+   "cover": 0.98,
+   "id": "zensensei",
+   "name": "Zensensei",
+   "section": "NPCs"
+  }
+ },
+ "gw1": {
+  "Rig_AI_Bamboo": {
+   "cover": 1.0,
+   "id": "bambooshoot",
+   "name": "Bambooshoot",
+   "section": "NPCs"
+  },
+  "Rig_AI_BonkChoy_Turret": {
+   "cover": 1.0,
+   "id": "bonk_choy",
+   "name": "Bonk Choy",
+   "section": "NPCs"
+  },
+  "Rig_AI_BullhornMine": {
+   "cover": 1.0,
+   "id": "engineer_bullhorn_mine",
+   "name": "Engineer Bullhorn Mine",
+   "section": "NPCs"
+  },
+  "Rig_AI_Cactus_Drone": {
+   "cover": 1.0,
+   "id": "cactusdrone",
+   "name": "Cactusdrone",
+   "section": "NPCs"
+  },
+  "Rig_AI_ChiliBean": {
+   "cover": 1.0,
+   "id": "chilibean",
+   "name": "Chilibean",
+   "section": "NPCs"
+  },
+  "Rig_AI_DoomShroom": {
+   "cover": 1.0,
+   "id": "doom_shroom",
+   "name": "Doom Shroom",
+   "section": "NPCs"
+  },
+  "Rig_AI_Engineer_Drone": {
+   "cover": 1.0,
+   "id": "engineer_drone",
+   "name": "Engineer Drone",
+   "section": "NPCs"
+  },
+  "Rig_AI_Engineer_Turret1": {
+   "cover": 1.0,
+   "id": "engineer_turret",
+   "name": "Engineer Turret",
+   "section": "NPCs"
+  },
+  "Rig_AI_Fume_Shroom": {
+   "cover": 1.0,
+   "id": "fume_shroom",
+   "name": "Fume Shroom",
+   "section": "NPCs"
+  },
+  "Rig_AI_Gargantuan": {
+   "cover": 1.0,
+   "id": "gargantuan",
+   "name": "Gargantuan",
+   "section": "NPCs"
+  },
+  "Rig_AI_GargantuanIMP": {
+   "cover": 1.0,
+   "id": "gargantuanimp",
+   "name": "Gargantuanimp",
+   "section": "NPCs"
+  },
+  "Rig_AI_IceShroom": {
+   "cover": 1.0,
+   "id": "iceshroom",
+   "name": "Iceshroom",
+   "section": "NPCs"
+  },
+  "Rig_AI_IronMaiden": {
+   "cover": 1.0,
+   "id": "ironmaiden",
+   "name": "Ironmaiden",
+   "section": "NPCs"
+  },
+  "Rig_AI_LaserBean": {
+   "cover": 1.0,
+   "id": "laser_bean",
+   "name": "Laser Bean",
+   "section": "NPCs"
+  },
+  "Rig_AI_PeaShooter_Turret_Cannon": {
+   "cover": 1.0,
+   "id": "peashooter_turret_cannon",
+   "name": "Peashooter Turret Cannon",
+   "section": "NPCs"
+  },
+  "Rig_AI_PeaShooter_Turret_Gatling": {
+   "cover": 1.0,
+   "id": "peashooter_turret_gatling",
+   "name": "Peashooter Turret Gatling",
+   "section": "NPCs"
+  },
+  "Rig_AI_PlantHealthStation": {
+   "cover": 1.0,
+   "id": "plant_health_station",
+   "name": "Plant Health Station",
+   "section": "NPCs"
+  },
+  "Rig_AI_Plant_Avatar": {
+   "cover": 1.0,
+   "id": "plant_avatar",
+   "name": "Plant Avatar",
+   "section": "NPCs"
+  },
+  "Rig_AI_PotatoMine": {
+   "cover": 1.0,
+   "id": "potatomine",
+   "name": "Potatomine",
+   "section": "NPCs"
+  },
+  "Rig_AI_Scaredy_shroom": {
+   "cover": 1.0,
+   "id": "scaredy_shroom",
+   "name": "Scaredy Shroom",
+   "section": "NPCs"
+  },
+  "Rig_AI_SnapDragon": {
+   "cover": 1.0,
+   "id": "snap_dragon",
+   "name": "Snap Dragon",
+   "section": "NPCs"
+  },
+  "Rig_AI_Spikeweed": {
+   "cover": 1.0,
+   "id": "spikeweed",
+   "name": "Spikeweed",
+   "section": "NPCs"
+  },
+  "Rig_AI_Sunflower_Turret": {
+   "cover": 1.0,
+   "id": "sunflower_turret",
+   "name": "Sunflower Turret",
+   "section": "NPCs"
+  },
+  "Rig_AI_Yeti": {
+   "cover": 1.0,
+   "id": "yeti",
+   "name": "Yeti",
+   "section": "NPCs"
+  },
+  "Rig_AllStar": {
+   "cover": 1.0,
+   "id": "allstarzombie",
+   "name": "Allstarzombie",
+   "section": "Characters"
+  },
+  "Rig_BrownCoat": {
+   "cover": 1.0,
+   "id": "browncoatzombie",
+   "name": "Browncoatzombie",
+   "section": "Characters"
+  },
+  "Rig_Cactus": {
+   "cover": 1.0,
+   "id": "cactus",
+   "name": "Cactus",
+   "section": "Characters"
+  },
+  "Rig_Chomper": {
+   "cover": 1.0,
+   "id": "chomper",
+   "name": "Chomper",
+   "section": "Characters"
+  },
+  "Rig_Engineer": {
+   "cover": 1.0,
+   "id": "engineerzombie",
+   "name": "Engineerzombie",
+   "section": "Characters"
+  },
+  "Rig_PeaShooter": {
+   "cover": 1.0,
+   "id": "peashooter",
+   "name": "Peashooter",
+   "section": "Characters"
+  },
+  "Rig_Scientist": {
+   "cover": 1.0,
+   "id": "scientistzombie",
+   "name": "Scientistzombie",
+   "section": "Characters"
+  },
+  "Rig_SimpleObject_RevivalSpring": {
+   "cover": 1.0,
+   "id": "revivalspring",
+   "name": "Revivalspring",
+   "section": "NPCs"
+  },
+  "Rig_Soldier": {
+   "cover": 1.0,
+   "id": "soldierzombie",
+   "name": "Soldierzombie",
+   "section": "Characters"
+  },
+  "Rig_Sunflower": {
+   "cover": 1.0,
+   "id": "sunflower",
+   "name": "Sunflower",
+   "section": "Characters"
+  },
+  "Rig_Teleporter": {
+   "cover": 1.0,
+   "id": "teleporter",
+   "name": "Teleporter",
+   "section": "NPCs"
+  }
+ },
+ "gw2": {
+  "Rig_AI_BullhornMine": {
+   "cover": 1.0,
+   "id": "proximitysonicmine",
+   "name": "Proximitysonicmine",
+   "section": "NPCs"
+  },
+  "Rig_AI_Cactus_Drone": {
+   "cover": 1.0,
+   "id": "cactusdrone",
+   "name": "Cactusdrone",
+   "section": "NPCs"
+  },
+  "Rig_AI_ChiliBean": {
+   "cover": 1.0,
+   "id": "chilibeanbomb",
+   "name": "Chilibeanbomb",
+   "section": "NPCs"
+  },
+  "Rig_AI_Engineer_Drone": {
+   "cover": 1.0,
+   "id": "engineerdrone",
+   "name": "Engineerdrone",
+   "section": "NPCs"
+  },
+  "Rig_AI_Gargantuan": {
+   "cover": 0.98,
+   "id": "gargantuar",
+   "name": "Gargantuar",
+   "section": "NPCs"
+  },
+  "Rig_AI_GargantuanIMP": {
+   "cover": 1.0,
+   "id": "simpleimp",
+   "name": "Simpleimp",
+   "section": "NPCs"
+  },
+  "Rig_AI_IronMaiden": {
+   "cover": 1.0,
+   "id": "ironmaiden",
+   "name": "Ironmaiden",
+   "section": "NPCs"
+  },
+  "Rig_AI_MiniPotatoMine": {
+   "cover": 1.0,
+   "id": "potatonuggetmine",
+   "name": "Potatonuggetmine",
+   "section": "NPCs"
+  },
+  "Rig_AI_Plant_Avatar": {
+   "cover": 0.87,
+   "id": "plantavatar",
+   "name": "Plantavatar",
+   "section": "NPCs"
+  },
+  "Rig_AI_PotatoMine": {
+   "cover": 1.0,
+   "id": "potatomine",
+   "name": "Potatomine",
+   "section": "NPCs"
+  },
+  "Rig_AI_RoseTeleporter": {
+   "cover": 1.0,
+   "id": "roseteleporter",
+   "name": "Roseteleporter",
+   "section": "NPCs"
+  },
+  "Rig_AI_Spikeweed": {
+   "cover": 1.0,
+   "id": "spikeweed",
+   "name": "Spikeweed",
+   "section": "NPCs"
+  },
+  "Rig_AI_TallNut_Four": {
+   "cover": 1.0,
+   "id": "tallnutbattlement",
+   "name": "Tallnutbattlement",
+   "section": "NPCs"
+  },
+  "Rig_PT_Bamboo": {
+   "cover": 1.0,
+   "id": "bambooshoot",
+   "name": "Bambooshoot",
+   "section": "NPCs"
+  },
+  "Rig_PT_BonkChoy": {
+   "cover": 1.0,
+   "id": "bonkchoy",
+   "name": "Bonkchoy",
+   "section": "NPCs"
+  },
+  "Rig_PT_DaisyTurret": {
+   "cover": 1.0,
+   "id": "sunflowerturret",
+   "name": "Sunflowerturret",
+   "section": "NPCs"
+  },
+  "Rig_PT_DamagePlant": {
+   "cover": 1.0,
+   "id": "damageboosterplant",
+   "name": "Damageboosterplant",
+   "section": "NPCs"
+  },
+  "Rig_PT_DoomShroom": {
+   "cover": 1.0,
+   "id": "doomshroom",
+   "name": "Doomshroom",
+   "section": "NPCs"
+  },
+  "Rig_PT_Fume_Shroom": {
+   "cover": 1.0,
+   "id": "fumeshroom",
+   "name": "Fumeshroom",
+   "section": "NPCs"
+  },
+  "Rig_PT_IceShroom": {
+   "cover": 1.0,
+   "id": "iceshroom",
+   "name": "Iceshroom",
+   "section": "NPCs"
+  },
+  "Rig_PT_LaserBean": {
+   "cover": 1.0,
+   "id": "laser_bean",
+   "name": "Laser Bean",
+   "section": "NPCs"
+  },
+  "Rig_PT_LightningReed": {
+   "cover": 1.0,
+   "id": "lightningreed",
+   "name": "Lightningreed",
+   "section": "NPCs"
+  },
+  "Rig_PT_PeaCannon": {
+   "cover": 1.0,
+   "id": "peacannon",
+   "name": "Peacannon",
+   "section": "NPCs"
+  },
+  "Rig_PT_PeaGatling": {
+   "cover": 1.0,
+   "id": "peagatling",
+   "name": "Peagatling",
+   "section": "NPCs"
+  },
+  "Rig_PT_RoseTurret": {
+   "cover": 1.0,
+   "id": "roseturret",
+   "name": "Roseturret",
+   "section": "NPCs"
+  },
+  "Rig_PT_Scaredy_shroom": {
+   "cover": 1.0,
+   "id": "scaredyshroom",
+   "name": "Scaredyshroom",
+   "section": "NPCs"
+  },
+  "Rig_PT_ShieldPlant2": {
+   "cover": 1.0,
+   "id": "shieldplant",
+   "name": "Shieldplant",
+   "section": "NPCs"
+  },
+  "Rig_PT_SnapDragon": {
+   "cover": 1.0,
+   "id": "snapdragon",
+   "name": "Snapdragon",
+   "section": "NPCs"
+  },
+  "Rig_PT_ToxicPlant": {
+   "cover": 1.0,
+   "id": "toxicplant",
+   "name": "Toxicplant",
+   "section": "NPCs"
+  },
+  "Rig_P_AssaultCorn": {
+   "cover": 1.0,
+   "id": "assaultcorn",
+   "name": "Assaultcorn",
+   "section": "Characters"
+  },
+  "Rig_P_Cactus": {
+   "cover": 1.0,
+   "id": "cactus",
+   "name": "Cactus",
+   "section": "Characters"
+  },
+  "Rig_P_Chomper": {
+   "cover": 1.0,
+   "id": "chomper",
+   "name": "Chomper",
+   "section": "Characters"
+  },
+  "Rig_P_Citron": {
+   "cover": 1.0,
+   "id": "citron",
+   "name": "Citron",
+   "section": "Characters"
+  },
+  "Rig_P_CrazyDave": {
+   "cover": 1.0,
+   "id": "crazydave",
+   "name": "Crazydave",
+   "section": "NPCs"
+  },
+  "Rig_P_Dandelion": {
+   "cover": 1.0,
+   "id": "dandelion",
+   "name": "Dandelion",
+   "section": "NPCs"
+  },
+  "Rig_P_GigaSquash": {
+   "cover": 1.0,
+   "id": "gigasquash",
+   "name": "Gigasquash",
+   "section": "NPCs"
+  },
+  "Rig_P_Gnome": {
+   "cover": 1.0,
+   "id": "gnomeufo",
+   "name": "Gnomeufo",
+   "section": "NPCs"
+  },
+  "Rig_P_GnomeKing": {
+   "cover": 1.0,
+   "id": "gnomeking",
+   "name": "Gnomeking",
+   "section": "NPCs"
+  },
+  "Rig_P_HypnoShroom": {
+   "cover": 1.0,
+   "id": "hypnoshroom",
+   "name": "Hypnoshroom",
+   "section": "NPCs"
+  },
+  "Rig_P_Imitator": {
+   "cover": 1.0,
+   "id": "imitator",
+   "name": "Imitator",
+   "section": "NPCs"
+  },
+  "Rig_P_Junkasaurus": {
+   "cover": 1.0,
+   "id": "junkasaurus",
+   "name": "Junkasaurus",
+   "section": "NPCs"
+  },
+  "Rig_P_MaryGold": {
+   "cover": 1.0,
+   "id": "marygold",
+   "name": "Marygold",
+   "section": "NPCs"
+  },
+  "Rig_P_PeaShooter": {
+   "cover": 1.0,
+   "id": "peashooter",
+   "name": "Peashooter",
+   "section": "Characters"
+  },
+  "Rig_P_Rose": {
+   "cover": 1.0,
+   "id": "rose",
+   "name": "Rose",
+   "section": "Characters"
+  },
+  "Rig_P_Sunflower": {
+   "cover": 1.0,
+   "id": "sunflower",
+   "name": "Sunflower",
+   "section": "Characters"
+  },
+  "Rig_P_SunflowerQueen": {
+   "cover": 1.0,
+   "id": "sunflowerqueen",
+   "name": "Sunflowerqueen",
+   "section": "NPCs"
+  },
+  "Rig_P_SuperBean": {
+   "cover": 1.0,
+   "id": "superbean",
+   "name": "Superbean",
+   "section": "NPCs"
+  },
+  "Rig_P_Torchwood": {
+   "cover": 1.0,
+   "id": "torchwood",
+   "name": "Torchwood",
+   "section": "NPCs"
+  },
+  "Rig_P_Weed": {
+   "cover": 1.0,
+   "id": "weedplant",
+   "name": "Weedplant",
+   "section": "NPCs"
+  },
+  "Rig_SimpleObject_RevivalSpring": {
+   "cover": 1.0,
+   "id": "revivalspring",
+   "name": "Revivalspring",
+   "section": "NPCs"
+  },
+  "Rig_Teleporter": {
+   "cover": 1.0,
+   "id": "teleporter",
+   "name": "Teleporter",
+   "section": "NPCs"
+  },
+  "Rig_ZT_ArmorBreaker": {
+   "cover": 1.0,
+   "id": "armorbreaker",
+   "name": "Armorbreaker",
+   "section": "NPCs"
+  },
+  "Rig_ZT_BoxerBot": {
+   "cover": 1.0,
+   "id": "boxerbot",
+   "name": "Boxerbot",
+   "section": "NPCs"
+  },
+  "Rig_ZT_DamageBooster": {
+   "cover": 1.0,
+   "id": "damagebooster",
+   "name": "Damagebooster",
+   "section": "NPCs"
+  },
+  "Rig_ZT_Engineer_Turret1": {
+   "cover": 1.0,
+   "id": "engineerturret01",
+   "name": "Engineerturret01",
+   "section": "NPCs"
+  },
+  "Rig_ZT_Engineer_Turret2": {
+   "cover": 1.0,
+   "id": "engineerturret02",
+   "name": "Engineerturret02",
+   "section": "NPCs"
+  },
+  "Rig_ZT_Engineer_Turret3": {
+   "cover": 1.0,
+   "id": "engineerturret03",
+   "name": "Engineerturret03",
+   "section": "NPCs"
+  },
+  "Rig_ZT_Engineer_Turret4": {
+   "cover": 1.0,
+   "id": "engineerturret04",
+   "name": "Engineerturret04",
+   "section": "NPCs"
+  },
+  "Rig_ZT_ExplodyTurret": {
+   "cover": 1.0,
+   "id": "explodyturret",
+   "name": "Explodyturret",
+   "section": "NPCs"
+  },
+  "Rig_ZT_FlameThrower": {
+   "cover": 1.0,
+   "id": "flamethrower",
+   "name": "Flamethrower",
+   "section": "NPCs"
+  },
+  "Rig_ZT_HealStation": {
+   "cover": 1.0,
+   "id": "healstation",
+   "name": "Healstation",
+   "section": "NPCs"
+  },
+  "Rig_ZT_LaserTurret": {
+   "cover": 1.0,
+   "id": "laserturret",
+   "name": "Laserturret",
+   "section": "NPCs"
+  },
+  "Rig_ZT_LightningRod": {
+   "cover": 1.0,
+   "id": "lightningrod",
+   "name": "Lightningrod",
+   "section": "NPCs"
+  },
+  "Rig_ZT_OrbitalSatellite": {
+   "cover": 1.0,
+   "id": "orbitalsatellite",
+   "name": "Orbitalsatellite",
+   "section": "NPCs"
+  },
+  "Rig_ZT_RocketTurret": {
+   "cover": 1.0,
+   "id": "rocketturret",
+   "name": "Rocketturret",
+   "section": "NPCs"
+  },
+  "Rig_ZT_SniperTurret": {
+   "cover": 1.0,
+   "id": "sniperturret",
+   "name": "Sniperturret",
+   "section": "NPCs"
+  },
+  "Rig_ZT_SnowMachine": {
+   "cover": 1.0,
+   "id": "snowmachine",
+   "name": "Snowmachine",
+   "section": "NPCs"
+  },
+  "Rig_ZT_StunTurret": {
+   "cover": 1.0,
+   "id": "stunturret",
+   "name": "Stunturret",
+   "section": "NPCs"
+  },
+  "Rig_ZT_Toxic": {
+   "cover": 1.0,
+   "id": "toxic",
+   "name": "Toxic",
+   "section": "NPCs"
+  },
+  "Rig_ZT_ZombieShield": {
+   "cover": 1.0,
+   "id": "zombieshield",
+   "name": "Zombieshield",
+   "section": "NPCs"
+  },
+  "Rig_ZV_BoltThrower": {
+   "cover": 1.0,
+   "id": "boltthrower",
+   "name": "Boltthrower",
+   "section": "NPCs"
+  },
+  "Rig_ZV_ImpDrake": {
+   "cover": 1.0,
+   "id": "impdrake",
+   "name": "Impdrake",
+   "section": "NPCs"
+  },
+  "Rig_ZV_ImpMech": {
+   "cover": 0.97,
+   "id": "impmech",
+   "name": "Impmech",
+   "section": "NPCs"
+  },
+  "Rig_ZV_Parrot": {
+   "cover": 1.0,
+   "id": "pirateparrot",
+   "name": "Pirateparrot",
+   "section": "NPCs"
+  },
+  "Rig_ZV_Pylon": {
+   "cover": 1.0,
+   "id": "imppylon",
+   "name": "Imppylon",
+   "section": "NPCs"
+  },
+  "Rig_ZV_Shrimp": {
+   "cover": 1.0,
+   "id": "impshrimp",
+   "name": "Impshrimp",
+   "section": "NPCs"
+  },
+  "Rig_ZV_ZombossBlimp": {
+   "cover": 1.0,
+   "id": "zombossblimp",
+   "name": "Zombossblimp",
+   "section": "NPCs"
+  },
+  "Rig_Z_AllStar": {
+   "cover": 0.99,
+   "id": "allstar",
+   "name": "Allstar",
+   "section": "Characters"
+  },
+  "Rig_Z_BrownCoat": {
+   "cover": 1.0,
+   "id": "browncoat",
+   "name": "Browncoat",
+   "section": "NPCs"
+  },
+  "Rig_Z_Engineer": {
+   "cover": 1.0,
+   "id": "engineer",
+   "name": "Engineer",
+   "section": "Characters"
+  },
+  "Rig_Z_FutureImp": {
+   "cover": 1.0,
+   "id": "futureimp",
+   "name": "Futureimp",
+   "section": "NPCs"
+  },
+  "Rig_Z_Goat": {
+   "cover": 0.72,
+   "id": "goat",
+   "name": "Goat",
+   "section": "Characters"
+  },
+  "Rig_Z_Imp": {
+   "cover": 1.0,
+   "id": "imp",
+   "name": "Imp",
+   "section": "Characters"
+  },
+  "Rig_Z_MechZombie": {
+   "cover": 1.0,
+   "id": "mechzombie",
+   "name": "Mechzombie",
+   "section": "NPCs"
+  },
+  "Rig_Z_Pirate": {
+   "cover": 1.0,
+   "id": "pirate",
+   "name": "Pirate",
+   "section": "Characters"
+  },
+  "Rig_Z_RoboZombie": {
+   "cover": 1.0,
+   "id": "roboassault",
+   "name": "Roboassault",
+   "section": "NPCs"
+  },
+  "Rig_Z_Scientist": {
+   "cover": 1.0,
+   "id": "scientist",
+   "name": "Scientist",
+   "section": "Characters"
+  },
+  "Rig_Z_Soldier": {
+   "cover": 1.0,
+   "id": "soldier",
+   "name": "Soldier",
+   "section": "Characters"
+  },
+  "Rig_Z_SuperHero": {
+   "cover": 1.0,
+   "id": "superhero",
+   "name": "Superhero",
+   "section": "Characters"
+  },
+  "Rig_Z_Yeti": {
+   "cover": 1.0,
+   "id": "yeti",
+   "name": "Yeti",
+   "section": "NPCs"
+  },
+  "Rig_Z_ZenSensei": {
+   "cover": 0.98,
+   "id": "zensensei",
+   "name": "Zensensei",
+   "section": "NPCs"
+  },
+  "Rig_Z_ZombossCat": {
+   "cover": 1.0,
+   "id": "zombosscat",
+   "name": "Zombosscat",
+   "section": "NPCs"
+  },
+  "Rig_Z_ZombossMech": {
+   "cover": 1.0,
+   "id": "zombossmechgiant",
+   "name": "Zombossmechgiant",
+   "section": "NPCs"
+  }
+ }
+}

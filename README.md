@@ -8,6 +8,7 @@ Bring maps, characters, customizations, NPCs, props and animations from **Plants
 - Plugin by **Zander/SillyDev**
 - App assistance by **Spooky4576**
 - Code base by **Brando/Physics**
+- Effects idea by **V0e**
 - Special thanks to **Window**
 - Thank you to our testers: **\_Crow**
 
@@ -50,9 +51,11 @@ Everything lives in the 3D Viewport sidebar (press **N**). Pick the game with th
 | --- | --- |
 | **Frostbite** | Whole maps. Pick one and click **Import map**. Big maps take a few minutes, and Blender stays usable while they convert. |
 | **Customizations** | A character's cosmetics (heads, hats, face props, arms, bodies…). Leave **Rig to skeleton** on so everything shares one armature. |
-| **NPCs** | Horde, bosses, turrets and vehicles with their costumes, props, weapons and abilities. **Spawn at 3D cursor** places them where you want. |
+| **NPCs** | Horde, bosses, turrets and vehicles with their costumes, props, weapons and abilities, plus ability objects such as the Chili Bean bomb, Potato Mine, Spikeweed, drones and teleporters. Everything comes rigged. **Spawn at 3D cursor** places them where you want. |
 | **Props** | Single props and buildings from any map. |
-| **Animations** | Animation clips for a character or NPC you imported. Select its armature, pick clips and click **Import selected**. |
+| **Effects** | Explosions, smoke, sparks and muzzle flashes from GW1 and GW2, such as the Chili Bean blast. Each emitter becomes a Geometry Nodes particle object with its flipbook textures, colour and fade curves, plus the effect's lights. Press play to watch it; quads face the scene camera. Heat distortion, ribbons, turbulence and sounds are not ported. |
+| **Game shaders** (optional) | Tick **Game shaders** before importing GW1/GW2 maps, characters, NPCs or props. Materials are then wired the way the games' own shaders read their textures, decoded from GW2's compiled shaders: ASM (occlusion, smoothness, metalness), ETT (emissive and tint masks), paint tints by UV quadrant, and the R x A normal maps. Off by default; BFN keeps the default materials. |
+| **Animations** | Animation clips for a character, NPC or ability you imported. The tab names the model each set of clips plays on. Select its armature, pick clips and click **Import selected**. |
 
 Tips:
 - Import a character's body first, then add hats, props and weapons. Items you add later go onto the same armature, so the whole character animates together.
