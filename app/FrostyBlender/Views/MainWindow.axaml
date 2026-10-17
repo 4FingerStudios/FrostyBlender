@@ -335,6 +335,20 @@
               <TextBlock Classes="eyebrow" Text="DISCORD" />
               <TextBlock Classes="h2" Text="Show it off, if you like" />
             </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Padding="14,8" Background="#5865F2" Foreground="White" Command="{Binding OpenCommand}" CommandParameter="https://discord.gg/Vh7cgGzUyB">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Classes="icon" Text="&#xE8BD;" FontSize="12" Foreground="White" VerticalAlignment="Center" />
+                  <TextBlock Text="Join the Discord" FontWeight="SemiBold" VerticalAlignment="Center" />
+                </StackPanel>
+              </Button>
+              <Button Padding="14,8" Command="{Binding OpenCommand}" CommandParameter="https://github.com/4FingerStudios/FrostyBlender">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Classes="icon" Text="&#xE943;" FontSize="11" VerticalAlignment="Center" />
+                  <TextBlock Text="FrostyBlender on GitHub" FontWeight="SemiBold" VerticalAlignment="Center" />
+                </StackPanel>
+              </Button>
+            </StackPanel>
             <TextBlock Classes="muted" TextWrapping="Wrap" IsVisible="{Binding !DiscordReady}"
                        Text="Discord features aren't set up in this build." />
             <StackPanel Spacing="14" IsVisible="{Binding DiscordReady}">
