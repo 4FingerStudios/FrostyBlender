@@ -20,6 +20,14 @@ public partial class MainViewModel : ObservableObject
 {
     public const string DiscordUrl = "https://discord.gg/Vh7cgGzUyB";
     public const string GitHubUrl = "https://github.com/4FingerStudios/FrostyBlender";
+    /// <summary>The FrostyBlender application in the Discord Developer Portal (its Application ID, which is
+    /// public). Empty turns Rich Presence and Discord login off. FROSTYBLENDER_DISCORD_APP overrides it.</summary>
+    public const string DiscordAppId = "1561079856249307246";
+    private static string DiscordApp => Environment.GetEnvironmentVariable("FROSTYBLENDER_DISCORD_APP") is { Length: > 0 } id ? id : DiscordAppId;
+
+    private readonly AppSettings _settings = AppSettings.Load();
+    private readonly DiscordPresence _presence = new(DiscordApp);
+    private System.Threading.CancellationTokenSource? _signIn;
 
     private readonly BlenderLink _link = new();
     private readonly Discovery _discovery;
@@ -47,6 +55,9 @@ public partial class MainViewModel : ObservableObject
             _selectedNav = Nav.First(n => n.Section == startSection);
         if (Games.Contains(StartOption("--game").ToUpperInvariant())) _game = StartOption("--game").ToUpperInvariant();
         _linkLoaded = _link.Load();
+        _discordPresence = _settings.DiscordPresence;
+        _discordUser = _settings.DiscordUser;
+        if (_discordUser != null) _ = LoadAvatar();
         _timer = new DispatcherTimer(TimeSpan.FromSeconds(1.5), DispatcherPriority.Background, async (_, _) => await Tick());
         _timer.Start();
         _ = Tick();
@@ -93,6 +104,11 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _hideAdditive = true;
     [ObservableProperty] private string _armature = ActiveArmature;
     [ObservableProperty] private int _ticked;
+    [ObservableProperty] private bool _discordPresence = true;
+    [ObservableProperty] private DiscordUser? _discordUser;
+    [ObservableProperty] private Bitmap? _discordAvatar;
+    [ObservableProperty] private string _discordStatus = "";
+    [ObservableProperty] private bool _signingIn;
 
     public Section Section => SelectedNav?.Section ?? Section.Maps;
     public bool IsBrowser => Section != Section.Settings;
@@ -147,6 +163,107 @@ public partial class MainViewModel : ObservableObject
         Section.Animations => "Import the character first, then send its clips.",
         _ => "",
     };
+
+    // Discord (both optional)
+    public bool DiscordReady => DiscordApp.Length > 0;
+    public bool SignedIn => DiscordUser != null;
+    public string DiscordName => DiscordUser?.DisplayName ?? "";
+    public string DiscordHandle => DiscordUser is { Username.Length: > 0 } u ? "@" + u.Username : "";
+
+    partial void OnDiscordUserChanged(DiscordUser? value)
+    {
+        OnPropertyChanged(nameof(SignedIn));
+        OnPropertyChanged(nameof(DiscordName));
+        OnPropertyChanged(nameof(DiscordHandle));
+    }
+
+    partial void OnDiscordPresenceChanged(bool value)
+    {
+        _settings.DiscordPresence = value;
+        _settings.Save();
+        if (!value) _ = _presence.Clear();
+        else _ = UpdatePresence();
+    }
+
+    [RelayCommand]
+    private async Task DiscordSignIn()
+    {
+        if (SigningIn)
+        {
+            _signIn?.Cancel();
+            return;
+        }
+        SigningIn = true;
+        DiscordStatus = "Finish signing in in your browser…";
+        _signIn = new System.Threading.CancellationTokenSource();
+        try
+        {
+            var user = await DiscordLogin.SignIn(DiscordApp, _signIn.Token);
+            DiscordUser = user;
+            _settings.DiscordUser = user;
+            _settings.Save();
+            DiscordStatus = "";
+            await LoadAvatar();
+        }
+        catch (OperationCanceledException)
+        {
+            DiscordStatus = "Sign-in cancelled.";
+        }
+        catch (Exception error)
+        {
+            DiscordStatus = error.Message;
+        }
+        finally
+        {
+            SigningIn = false;
+        }
+    }
+
+    [RelayCommand]
+    private void DiscordSignOut()
+    {
+        DiscordUser = null;
+        DiscordAvatar = null;
+        _settings.DiscordUser = null;
+        _settings.Save();
+        DiscordStatus = "Signed out. FrostyBlender keeps nothing from your account.";
+    }
+
+    private async Task LoadAvatar()
+    {
+        if (DiscordUser is not { } user) return;
+        try
+        {
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            var bytes = await http.GetByteArrayAsync(user.AvatarUrl);
+            DiscordAvatar = new Bitmap(new System.IO.MemoryStream(bytes));
+        }
+        catch (Exception) { /* the name is enough */ }
+    }
+
+    /// <summary>What the profile shows while FrostyBlender is open: the section and what is picked or sending.</summary>
+    private async Task UpdatePresence()
+    {
+        if (!DiscordPresence || !_presence.Enabled) return;
+        var game = Game switch { "GW1" => "Garden Warfare 1", "GW2" => "Garden Warfare 2", "BFN" => "Battle for Neighborville", _ => Game };
+        string details, state;
+        if (_job != null && SelectedEntry != null)
+        {
+            details = $"Porting {SelectedEntry.Title} to Blender";
+            state = game;
+        }
+        else if (Section == Section.Settings)
+        {
+            details = "In settings";
+            state = "Getting ready to port";
+        }
+        else
+        {
+            details = $"Browsing {SectionTitle.ToLowerInvariant()}";
+            state = SelectedEntry != null ? $"{game}: {SelectedEntry.Title}" : game;
+        }
+        await _presence.Update(details, state);
+    }
 
     // link.json details for Settings
     public string LinkFile => BlenderLink.LinkFile;
@@ -569,6 +686,7 @@ public partial class MainViewModel : ObservableObject
         // Blender rewrites link.json every few seconds; pick up a newer add-on without a restart.
         var hadIcons = _icons.Problem == null && _link.Info != null;
         LinkLoaded = _link.Load() || LinkLoaded;
+        _ = UpdatePresence();
         if (!hadIcons && _link.Info != null && _icons.Problem == null && IsBrowser && _all.Count > 0)
         {
             if (JobStatus.StartsWith("Icons and loading screens")) JobStatus = "";

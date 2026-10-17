@@ -65,7 +65,7 @@ Tips:
 
 ## FrostyBlender app
 
-A desktop app for browsing everything in the games, in the style of Fortnite Porting. Pick **Maps**, **Characters**, **NPCs**, **Props** or **Animations**, choose GW1 / GW2 / BFN, click a tile, tick what you want and press **Send to Blender**.
+A desktop app for browsing everything in the games, in the style of Fortnite Porting. Pick **Maps**, **Characters**, **NPCs**, **Props**, **Effects** or **Animations**, choose GW1 / GW2 / BFN, click a tile, tick what you want and press **Send to Blender**.
 
 1. Install the add-on (above) and open Blender once. The add-on tells the app where Blender, its tools and your game folders are.
 2. Run `FrostyBlender-…-windows-x64.exe`. It needs add-on 1.9.1 or newer for icons and loading screens.
@@ -74,6 +74,8 @@ A desktop app for browsing everything in the games, in the style of Fortnite Por
 Maps and props show each map's loading screen, so you can see what you're porting. Characters, NPCs and animated characters show the games' own menu art: hero portraits, boss heads, turret cards and the icon of each cosmetic. Icons are made the first time you open a game or character (a few seconds) and kept, so they show instantly after that. Items the game has no art for keep a plain row.
 
 Browsing works even when Blender is closed. Imports run in Blender exactly as if you'd pressed Import in the add-on's tab. The add-on only listens on this PC (`127.0.0.1`, port 24567), and you can turn the link off in its preferences under **Link to the FrostyBlender app**.
+
+**Discord (optional, in Settings):** with the Discord app running, your profile shows *Playing FrostyBlender* with what you're browsing or porting; untick it to hide it. You can also **Log in with Discord** to show your name and avatar in the app. It only asks for your username and avatar, never sees your password, and keeps no login token.
 
 ## Troubleshooting
 

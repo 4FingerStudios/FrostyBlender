@@ -330,6 +330,49 @@
         </Border>
 
         <Border Classes="card">
+          <StackPanel Spacing="14">
+            <StackPanel Spacing="2">
+              <TextBlock Classes="eyebrow" Text="DISCORD" />
+              <TextBlock Classes="h2" Text="Show it off, if you like" />
+            </StackPanel>
+            <TextBlock Classes="muted" TextWrapping="Wrap" IsVisible="{Binding !DiscordReady}"
+                       Text="Discord features aren't set up in this build." />
+            <StackPanel Spacing="14" IsVisible="{Binding DiscordReady}">
+              <CheckBox IsChecked="{Binding DiscordPresence}">
+                <StackPanel Spacing="2">
+                  <TextBlock Text="Show FrostyBlender on my Discord profile" />
+                  <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap"
+                             Text="Friends see &quot;Playing FrostyBlender&quot; with what you're browsing or porting. Needs the Discord app running on this PC." />
+                </StackPanel>
+              </CheckBox>
+              <Border Height="1" Background="{StaticResource Line}" />
+              <Grid ColumnDefinitions="Auto,*,Auto" IsVisible="{Binding SignedIn}">
+                <Border Width="44" Height="44" CornerRadius="22" ClipToBounds="True" Background="{StaticResource Line}" Margin="0,0,12,0">
+                  <Image Source="{Binding DiscordAvatar}" Stretch="UniformToFill" />
+                </Border>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
+                  <TextBlock Text="{Binding DiscordName}" FontWeight="SemiBold" />
+                  <TextBlock Classes="muted" FontSize="12" Text="{Binding DiscordHandle}" />
+                </StackPanel>
+                <Button Grid.Column="2" Content="Sign out" Padding="16,8" VerticalAlignment="Center" Command="{Binding DiscordSignOutCommand}" />
+              </Grid>
+              <StackPanel Spacing="8" IsVisible="{Binding !SignedIn}">
+                <TextBlock Classes="muted" TextWrapping="Wrap"
+                           Text="Optional: sign in with Discord to show your name and avatar here. FrostyBlender only asks for your username and avatar, and never sees your password." />
+                <Button Classes="accent" Padding="18,8" HorizontalAlignment="Left" Command="{Binding DiscordSignInCommand}">
+                  <Panel>
+                    <TextBlock Text="Log in with Discord" IsVisible="{Binding !SigningIn}" />
+                    <TextBlock Text="Cancel sign-in" IsVisible="{Binding SigningIn}" />
+                  </Panel>
+                </Button>
+              </StackPanel>
+              <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap" Text="{Binding DiscordStatus}"
+                         IsVisible="{Binding DiscordStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
           <Grid ColumnDefinitions="Auto,*">
             <Border Width="72" Height="72" CornerRadius="18" Background="{StaticResource BrandGradient}" BorderBrush="#3A5A30" BorderThickness="1"
                     VerticalAlignment="Top" Margin="0,0,18,0">
