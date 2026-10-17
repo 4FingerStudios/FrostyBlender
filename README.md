@@ -1,8 +1,11 @@
 # Frostbite Map Importer for Blender
 
 Made by **4FingerStudios**  
-Plugin by **Zander/SillyDev**  
+Plugin by **Zander/SillyDev**
+App Assistance *Spooky4576**  
 Code Base By **Brando/Physics**
+Specail Thanks too **Window***
+Thank you to our Testers **_Crow**
 
 **Two things players should know:**
 
