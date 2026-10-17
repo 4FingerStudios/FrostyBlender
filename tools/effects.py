@@ -4,11 +4,14 @@ An effect is an EffectBlueprint whose EffectEntityData lists emitters and lights
 ScalableEmitterDocument: a template (count, lifetime, texture flipbook, mesh) and a chain of
 processors that spawn particles (rate, position, direction, speed, size, rotation, colour) and update
 them over their life (size, colour, transparency, gravity, drag). Conversion runs the spawn side here,
-seeded so the result is repeatable, and writes each particle's start state plus the over-life curves;
+seeded so the result is repeatable, integrates every particle over its life (gravity, drag, local force,
+velocity and spin, each with its over-life curve) and writes the recorded path plus the over-life curves;
 the Blender add-on plays them back with Geometry Nodes, so the timeline scrubs without a cache.
+GPU emitters are read into the same processors. Semantics follow the game data and V0e's VFX Editor
+plugin for Frosty (types, alignments, cone angles, motion stretch).
 
-Approximated: turbulence, wind, collisions, alpha erosion and stretched (velocity-aligned) quads.
-Not ported: ribbons, beams, GPU emitters and sounds (listed in each effect's notes).
+Approximated: turbulence, alpha erosion, ribbons (flat strips) and beams (quads).
+Not ported: wind, collisions, heat distortion and sounds (listed in each effect's notes).
 
     python effects.py discover --game GAME --out effects.json
     python effects.py export --game GAME --items items.json --out EXPORT
@@ -278,10 +281,12 @@ def _unit(n, rng):
 class Emitter:
     """Evaluates one emitter template's processor chain."""
 
-    def __init__(self, archive, doc, template, seed, notes):
+    def __init__(self, archive, doc, template, seed, notes, processors=None):
         self.archive, self.doc, self.template, self.notes = archive, doc, template, notes
         self.rng = np.random.default_rng(seed)
-        self.processors = []
+        self.processors = list(processors or [])
+        if processors is not None:
+            return
         node = self.obj(template.get('RootProcessor'))
         guard = 0
         while node is not None and guard < 200:
@@ -335,12 +340,19 @@ class Emitter:
             f = np.clip(_poly(o.get('Coefficients'), t), 0, 1)[:, None]
             return _vec(o.get('Color0')) * (1 - f) + _vec(o.get('Color1')) * f
         if kind == 'RotateVectorData':
-            # Spreads the up axis into a cone `Angle` degrees wide.
-            half = math.radians(min(float(o.get('Angle', 0)), 360.0)) / 2
+            # A cone `Angle` degrees from its input direction (up when it has none).
+            axis = self.evaluate(o.get('Pre'), t) if o.get('Pre') else None
+            axis = axis[:, :3] if axis is not None and axis.ndim == 2 else np.tile([0.0, 1.0, 0.0], (n, 1))
+            axis = axis / np.maximum(np.linalg.norm(axis, axis=1, keepdims=True), 1e-9)
+            half = math.radians(min(float(o.get('Angle', 0)), 180.0))
             cos_t = 1 - self.rng.random(n) * (1 - math.cos(half))
             sin_t = np.sqrt(np.maximum(1 - cos_t ** 2, 0))
             phi = self.rng.random(n) * 2 * math.pi
-            return np.stack([sin_t * np.cos(phi), cos_t, sin_t * np.sin(phi)], 1)
+            helper = np.where(np.abs(axis[:, 1:2]) > 0.99, [[1.0, 0.0, 0.0]], [[0.0, 1.0, 0.0]])
+            u = np.cross(axis, helper)
+            u /= np.maximum(np.linalg.norm(u, axis=1, keepdims=True), 1e-9)
+            w = np.cross(axis, u)
+            return axis * cos_t[:, None] + (u * np.cos(phi)[:, None] + w * np.sin(phi)[:, None]) * sin_t[:, None]
         if o.get('Pre'):
             self.note('%s approximated by its input' % kind)
             return self.evaluate(o.get('Pre'), t)
@@ -378,7 +390,8 @@ class Emitter:
 
     # ---- spawning
     def spawn_times(self, duration, loop):
-        rate = self.find('SpawnRateData')
+        # Ribbons spawn by distance travelled; a still emitter is played at the same rate per second.
+        rate = self.find('SpawnRateData') or self.find('SpawnRibbonRateData')
         if rate is None:
             burst = int(self.template.get('MaxCount', 1))
             return np.zeros(min(burst, MAX_PARTICLES))
@@ -427,9 +440,109 @@ def _loops(template):
     return float(template.get('Lifetime', 0) or 0) <= 0
 
 
-def emitter_data(archive, converter, doc, template, name, transform, delay, seed):
+# EmittableType and EmittableAlignment values, matched against V0e's VFX Editor plugin and the game data.
+EMITTABLE = {0: 'point', 100: 'quad', 200: 'mesh', 300: 'ribbon', 400: 'beam'}
+ALIGN = {0: 'camera', 1: 'camera', 2: 'world', 3: 'velocity', 4: 'camera', 5: 'camera', 6: 'stretch', 7: 'stretch'}
+KEYS = 17      # recorded points along each particle's path
+STEPS = 64     # integration steps per particle life
+
+
+def life_curve(e, processor, n, emitter_t):
+    """f(life 0..1) -> per-particle multiplier from an update processor's evaluator (1 when it has none).
+    Curves of the particle's life are evaluated as it ages; any other input is fixed at spawn."""
+    if processor is None or not processor.get('Pre'):
+        return lambda f: np.ones(n)
+    if processor.get('EvaluatorInput') == 2:
+        probe = e.evaluate(processor.get('Pre'), np.zeros(2))
+        if probe is None:
+            return lambda f: np.ones(n)
+
+        def at(f):
+            v = e.evaluate(processor.get('Pre'), np.full(n, f))
+            v = v[:, 0] if v.ndim == 2 else v
+            return v
+        return at
+    fixed = e.scalar(processor, n, emitter_t)
+    return lambda f: fixed
+
+
+def simulate(e, position, velocity, life, emitter_t, notes):
+    """Euler-integrate every particle over its own life (as the game and the VFX Editor do), recording KEYS
+    points of its path and its spin angle, so forces with over-life curves come out right."""
+    n = len(life)
+    g = e.find('GravityData')
+    gravity = np.array([0.0, -float(g.get('Gravity', 0)), 0.0]) if g else np.zeros(3)
+    g_scale = 1 - float(g.get('PerParticleRandomness', 0) or 0) * e.rng.random(n) if g else np.ones(n)
+    g_curve = life_curve(e, g, n, emitter_t)
+    forces = [p for p in e.processors if p['$type'] == 'LocalForceData']
+    local = sum((_vec(p.get('LocalForce')) for p in forces), np.zeros(3))
+    l_scale = 1 - float(forces[0].get('PerParticleRandomness', 0) or 0) * e.rng.random(n) if forces else np.ones(n)
+    l_curve = life_curve(e, forces[0], n, emitter_t) if forces else (lambda f: np.ones(n))
+    a = e.find('AirResistanceData')
+    drag = max(float(a.get('DragFactor', 0)), 0.0) if a else 0.0
+    d_curve = life_curve(e, a, n, emitter_t)
+    moves = e.find('UpdateLinearVelocityData')
+    v_curve = life_curve(e, moves, n, emitter_t)
+    rot_p, spin_p = e.find('SpawnRotationData'), e.find('SpawnRotationSpeedData')
+    angle = float(rot_p.get('Rotation', 0)) * e.scalar(rot_p, n) * 2 * math.pi if rot_p else np.zeros(n)
+    spin = float(spin_p.get('RotationSpeed', 0)) * e.scalar(spin_p, n) * 2 * math.pi if spin_p else np.zeros(n)
+    r = e.find('UpdateRotationData')
+    r_curve = life_curve(e, r, n, emitter_t)
+    if spin_p and r is None:
+        spin = np.zeros(n)
+    t = e.find('TurbulanceData')
+    turbulence = float(t.get('Intensity', 0) or 0) * _vec(t.get('Multiplier'), default=1) if t else np.zeros(3)
+    period = max(float(t.get('PeriodSpace', 1) or 1), 1e-3) if t else 1.0
+    phase = e.rng.random((n, 3)) * 100
+    if t:
+        notes.append('turbulence approximated')
+    for kind in ('WorldWindData', 'UpdateCollisionData'):
+        if e.find(kind):
+            notes.append(kind.replace('Data', '').replace('Update', '') + ' not simulated')
+    if moves is None:  # nothing moves the particles
+        velocity = np.zeros_like(velocity)
+        gravity, local, turbulence = np.zeros(3), np.zeros(3), np.zeros(3)
+
+    p, v = position.astype(float).copy(), velocity.astype(float).copy()
+    dt = (life / STEPS)[:, None]
+    track, angles = [p.copy()], [angle.copy()]
+    every = STEPS // (KEYS - 1)
+    for s in range(STEPS):
+        f = s / STEPS
+        acc = gravity * (g_scale * g_curve(f))[:, None] + local * (l_scale * l_curve(f))[:, None]
+        if turbulence.any():
+            q = p / period + phase
+            acc = acc + turbulence * np.stack([np.sin(q[:, 1] * 1.7 + q[:, 2]), np.sin(q[:, 2] * 1.3 + q[:, 0]),
+                                               np.sin(q[:, 0] * 1.1 + q[:, 1])], 1)
+        v = v + acc * dt
+        if drag:
+            v = v * np.exp(-drag * np.maximum(d_curve(f), 0)[:, None] * dt)
+        p = p + v * v_curve(f)[:, None] * dt
+        angle = angle + spin * r_curve(f) * dt[:, 0]
+        if (s + 1) % every == 0:
+            track.append(p.copy())
+            angles.append(angle.copy())
+    return np.stack(track, 1), np.stack(angles, 1)
+
+
+def _direction(e, position, n, up):
+    """Spawn directions: the direction processor's evaluator, bent toward the emitter's origin as
+    DirectionFromEmitterOrigin asks."""
+    p = e.find('SpawnDirectionData')
+    d = e.vector(p, n, up)
+    d = d / np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-9)
+    k = float(p.get('DirectionFromEmitterOrigin', 0) or 0) if p else 0.0
+    if k:
+        out = position / np.maximum(np.linalg.norm(position, axis=1, keepdims=True), 1e-9)
+        out[np.linalg.norm(position, axis=1) < 1e-4] = up
+        d = d * (1 - k) + out * k
+        d = d / np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-9)
+    return d
+
+
+def emitter_data(archive, converter, doc, template, name, transform, delay, seed, processors=None, gpu=False):
     notes = []
-    e = Emitter(archive, doc, template, seed, notes)
+    e = Emitter(archive, doc, template, seed, notes, processors)
     loop = _loops(template)
     duration = LOOP_SECONDS if loop else float(template['Lifetime'])
     spawn = e.spawn_times(duration, loop)
@@ -437,20 +550,14 @@ def emitter_data(archive, converter, doc, template, name, transform, delay, seed
     emitter_t = spawn / max(duration, 1e-6)
     life = e.lifetimes(n)
     keep = e.limit(spawn, life)
-    up = _vec(transform.get('up'), default=0) if transform else np.array([0, 1, 0.])
+    up = np.array([0.0, 1.0, 0.0])
 
     position = e.vector(e.find('SpawnPositionData'), n, [0, 0, 0])
-    direction = e.vector(e.find('SpawnDirectionData'), n, up)
-    direction /= np.maximum(np.linalg.norm(direction, axis=1, keepdims=True), 1e-9)
+    direction = _direction(e, position, n, up)
     speed_p = e.find('SpawnSpeedData')
     speed = float(speed_p.get('Speed', 0)) * e.scalar(speed_p, n, emitter_t) if speed_p else np.zeros(n)
     size_p = e.find('SpawnSizeData')
     size = float(size_p.get('Size', 1)) * e.scalar(size_p, n, emitter_t) if size_p else np.ones(n)
-    rot_p, spin_p = e.find('SpawnRotationData'), e.find('SpawnRotationSpeedData')
-    rotation = float(rot_p.get('Rotation', 0)) * e.scalar(rot_p, n) * 2 * math.pi if rot_p else np.zeros(n)
-    spin = float(spin_p.get('RotationSpeed', 0)) * e.scalar(spin_p, n) * 2 * math.pi if spin_p else np.zeros(n)
-    if spin_p and e.find('UpdateRotationData') is None:
-        spin = np.zeros(n)
     frame_p = e.find('SpawnAnimationFrameData')
     frame = np.floor(float(frame_p.get('AnimationFrame', 0)) * e.scalar(frame_p, n)) if frame_p else np.zeros(n)
     tint_p = e.find('SpawnColorRandomData')
@@ -459,29 +566,13 @@ def emitter_data(archive, converter, doc, template, name, transform, delay, seed
         tint = _vec(tint_p.get('Color0'), default=1) * (1 - f) + _vec(tint_p.get('Color1'), default=1) * f
     else:
         tint = np.ones((n, 3))
-
-    gravity, drag = np.zeros(3), 0.0
-    g = e.find('GravityData')
-    if g:
-        gravity[1] -= float(g.get('Gravity', 0))
-    for force in (p for p in e.processors if p['$type'] == 'LocalForceData'):
-        gravity += _vec(force.get('LocalForce'))
-    a = e.find('AirResistanceData')
-    if a:
-        drag = max(float(a.get('DragFactor', 0)), 0.0)
-    if e.find('UpdateLinearVelocityData') is None:
-        speed = np.zeros(n)
-        gravity[:] = 0
-    for kind in ('TurbulanceData', 'WorldWindData', 'UpdateCollisionData'):
-        if e.find(kind):
-            e.note(kind.replace('Data', '') + ' not simulated')
+    flip = np.stack([e.rng.random(n) < float(template.get('FlipUProbability', 0) or 0),
+                     e.rng.random(n) < float(template.get('FlipVProbability', 0) or 0)], 1).astype(float)
+    track, angles = simulate(e, position, direction * speed[:, None], life, emitter_t, notes)
 
     color = e.curve('UpdateColorData')
     base_color = _vec((e.find('UpdateColorData') or {}).get('Color'), default=1)
-    if color is None:
-        color = [base_color.tolist()] * SAMPLES
-    else:
-        color = (np.asarray(color) * base_color).tolist()
+    color = [base_color.tolist()] * SAMPLES if color is None else (np.asarray(color) * base_color).tolist()
     texture_coords = e.find('UpdateTextureCoordsData')
     texture, atlas = None, {}
     if texture_coords:
@@ -500,16 +591,30 @@ def emitter_data(archive, converter, doc, template, name, transform, delay, seed
             mesh = converter.convert_static(found, 0)
         except Exception as error:  # a mesh that does not convert falls back to quads
             notes.append('mesh particle not converted: %s' % error)
-    kind = {100: 'quad', 200: 'mesh', 300: 'ribbon', 400: 'beam'}.get(template.get('EmittableType'), 'quad')
+    kind = EMITTABLE.get(template.get('EmittableType'), 'quad')
     if mesh:
         kind = 'mesh'
-    if kind in ('ribbon', 'beam'):
-        notes.append('%s drawn as quads' % kind)
+    elif kind == 'mesh':
+        kind = 'quad'
+    if kind == 'beam':
+        notes.append('beam drawn as quads')
+    align = ALIGN.get(template.get('EmittableAlignment', 0), 'camera')
+    stretch = float(template.get('MotionStretchMultiplier', 1) or 0)
+    if gpu and float(template.get('StreakFactor', 0) or 0) > 0:
+        align, stretch = 'stretch', float(template['StreakFactor'])
+    alpha = e.curve('UpdateTransparencyData')
+    level = e.find('UpdateAlphaLevelMinData'), e.find('UpdateAlphaLevelMaxData')
+    if alpha and any(level):
+        lo = float(level[0].get('MinLevel', 0)) if level[0] else 0.0
+        hi = float(level[1].get('MaxLevel', 1)) if level[1] else 1.0
+        alpha = [min(max(a, lo), hi) for a in alpha]
 
     alive = keep
     return {
         'name': name, 'kind': kind, 'transform': transform_matrix(transform), 'delay': delay, 'loop': loop,
-        'duration': duration, 'alignment': template.get('EmittableAlignment', 0),
+        'duration': duration, 'alignment': template.get('EmittableAlignment', 0), 'align': align,
+        'stretch': stretch, 'stretch_clamp': float(template.get('MotionStretchLengthClamp', 100) or 100),
+        'stretch_relative_clamp': float(template.get('MotionStretchRelativeLengthClamp', 100) or 100),
         'world_up': _vec(template.get('WorldAlignmentDirection'), default=0).tolist(),
         'emissive': bool(template.get('Emissive')) or max(max(c) for c in color) > 2.0,
         'texture': texture, 'mesh': mesh[0] if mesh else None, 'materials': mesh[1] if mesh else [],
@@ -517,17 +622,71 @@ def emitter_data(archive, converter, doc, template, name, transform, delay, seed
         'columns': max(int(atlas.get('AnimationColumnCount') or template.get('AnimationFrameColumnCount', 1) or 1), 1),
         'anim_speed': float(anim.get('AnimationSpeed', 0)) if anim else 0.0,
         'anim_on_life': bool(anim.get('BasedOnLifetime')) if anim else False,
-        'gravity': gravity.tolist(), 'drag': drag,
         'curves': {'size': e.curve('UpdateSizeData'), 'size_x': e.curve('UpdateSizeXData'),
-                   'size_y': e.curve('UpdateSizeYData'), 'alpha': e.curve('UpdateTransparencyData'),
-                   'color': color},
+                   'size_y': e.curve('UpdateSizeYData'), 'alpha': alpha, 'color': color},
         'particles': {
             'spawn': (spawn[alive] + delay).round(4).tolist(), 'life': life[alive].round(4).tolist(),
-            'position': position[alive].round(4).tolist(), 'velocity': (direction * speed[:, None])[alive].round(4).tolist(),
-            'size': size[alive].round(4).tolist(), 'rotation': rotation[alive].round(4).tolist(),
-            'spin': spin[alive].round(4).tolist(), 'frame': frame[alive].tolist(), 'tint': tint[alive].round(4).tolist()},
+            'size': size[alive].round(4).tolist(), 'frame': frame[alive].tolist(), 'tint': tint[alive].round(4).tolist(),
+            'flip': flip[alive].tolist(), 'track': track[alive].round(4).tolist(), 'angle': angles[alive].round(4).tolist()},
         'notes': notes,
     }
+
+
+def _gpu_processors(doc, template):
+    """A GPU emitter template as the processor list a CPU emitter would have."""
+    def obj(name):
+        ref = template.get(name) or {}
+        return doc['objects'][ref['index']] if ref.get('$pointer') == 1 else None
+
+    def pointer(name):
+        ref = template.get(name) or {}
+        return ref if ref.get('$pointer') == 1 else None
+
+    out = [{'$type': 'SpawnRateData', 'SpawnRate': float(template.get('SpawnRate', 0)), 'EvaluatorInput': 1},
+           {'$type': 'UpdateAgeData', 'Lifetime': float(template.get('Lifetime', 1)), 'EvaluatorInput': 1},
+           {'$type': 'UpdateLinearVelocityData', 'EvaluatorInput': 2},
+           {'$type': 'UpdateTextureCoordsData', 'BaseTexture': template.get('BaseTexture'), 'EvaluatorInput': 2},
+           {'$type': 'UpdateColorData', 'Color': template.get('Color'), 'EvaluatorInput': 2},
+           {'$type': 'LocalForceData', 'LocalForce': template.get('GlobalAcceleration'), 'EvaluatorInput': 2},
+           {'$type': 'AirResistanceData', 'DragFactor': float(template.get('ParticleDrag', 0) or 0), 'EvaluatorInput': 2}]
+    shape = next((pointer(k) for k in ('SpawnPositionSuperSphere', 'SpawnPositionSphere', 'SpawnPositionRandomXYZ',
+                                       'SpawnPositionBox') if pointer(k)), None)
+    out.append({'$type': 'SpawnPositionData', 'Pre': shape, 'EvaluatorInput': 1})
+    shape = next((pointer(k) for k in ('SpawnDirectionSuperSphere', 'SpawnDirectionSphere', 'SpawnDirectionRandomXYZ')
+                  if pointer(k)), None)
+    direction = dict(obj('SpawnDirection') or {}, **{'$type': 'SpawnDirectionData', 'Pre': shape, 'EvaluatorInput': 1})
+    out.append(direction)
+    speed = obj('SpawnSpeed') or {}
+    out.append({'$type': 'SpawnSpeedData', 'Speed': float(speed.get('Speed', 0) or 0),
+                'Pre': pointer('SpawnSpeedRandomXYZ'), 'EvaluatorInput': 1})
+    size = obj('SpawnSize') or {}
+    out.append({'$type': 'SpawnSizeData', 'Size': float(size.get('Size', 1) or 1),
+                'Pre': pointer('SpawnSizeRandomXYZ'), 'EvaluatorInput': 1})
+    if pointer('ParticleSizePolynomial'):
+        out.append({'$type': 'UpdateSizeData', 'Pre': pointer('ParticleSizePolynomial'), 'EvaluatorInput': 2})
+    transparency = pointer('TransparencyPolynomial') or (obj('Transparency') or {}).get('Pre')
+    if transparency:
+        out.append({'$type': 'UpdateTransparencyData', 'Pre': transparency, 'EvaluatorInput': 2})
+    color = obj('ColorProcessor')
+    if color:
+        tint = color.get('Pre') if color.get('$type') == 'UpdateColorData' else template.get('ColorProcessor')
+        out[4] = {'$type': 'UpdateColorData', 'Pre': tint, 'EvaluatorInput': 2,
+                  'Color': color.get('Color') if color.get('$type') == 'UpdateColorData' else template.get('Color')}
+    if float(template.get('RotationSpeed', 0) or 0):
+        out.append({'$type': 'SpawnRotationSpeedData', 'RotationSpeed': float(template['RotationSpeed']) / (2 * math.pi),
+                    'EvaluatorInput': 1})
+        out.append({'$type': 'UpdateRotationData', 'EvaluatorInput': 2, 'Pre': pointer('RotationSpeedPolynomial')})
+    return out
+
+
+def gpu_template(template):
+    """GPU template fields under the names emitter_data reads from CPU templates."""
+    t = dict(template)
+    t['Lifetime'] = float(template.get('EmitterLifetime', 0) or 0)
+    t['MaxCount'] = int(template.get('MaxParticleCount', 0) or 0)
+    t['EmittableType'] = 100
+    t['EmittableAlignment'] = 0
+    return t
 
 
 def transform_matrix(transform):
@@ -550,7 +709,9 @@ def light_data(archive, doc, entity):
 def effect_data(archive, converter, doc, name, seen=None):
     seen = (seen or set()) | {doc['guid']}
     root = archive.resolve(doc, doc['objects'][0].get('Object'))
-    out = {'name': name, 'emitters': [], 'lights': [], 'notes': []}
+    # version 2: particles carry their recorded paths ('track', 'angle'); version 1 files held start
+    # position and velocity, and the add-on still plays those.
+    out = {'name': name, 'version': 2, 'emitters': [], 'lights': [], 'notes': []}
     if not root:
         out['notes'].append('no effect entity')
         return out
@@ -560,16 +721,18 @@ def effect_data(archive, converter, doc, name, seen=None):
             continue
         entity = found[1]
         kind = entity['$type']
-        if kind == 'EmitterEntityData':
-            emitter = archive.resolve(doc, entity.get('Emitter'))
+        if kind in ('EmitterEntityData', 'GpuEmitterEntityData'):
+            emitter = archive.resolve(doc, entity.get('Emitter') or entity.get('GpuEmitter') or entity.get('EmitterDocument'))
             if not emitter:
                 out['notes'].append('emitter %d not exported' % i)
                 continue
             edoc, eobj = emitter
-            if eobj['$type'] != 'ScalableEmitterDocument':
+            gpu = eobj['$type'] == 'GpuRuntimeEmitterDocument'
+            if eobj['$type'] != 'ScalableEmitterDocument' and not gpu:
                 out['notes'].append('%s not ported' % eobj['$type'].replace('Document', ''))
                 continue
-            template = archive.resolve(edoc, eobj.get('TemplateDataHigh') or eobj.get('TemplateDataUltra'))
+            template = archive.resolve(edoc, eobj.get('TemplateData') if gpu else
+                                       eobj.get('TemplateDataHigh') or eobj.get('TemplateDataUltra'))
             if not template:
                 continue
             ename = next((a['name'] for a, d in archive.documents.values() if d is edoc), 'emitter_%d' % i)
@@ -578,8 +741,15 @@ def effect_data(archive, converter, doc, name, seen=None):
                 continue
             seed = int(hashlib.sha1(('%s|%d' % (ename, i)).encode()).hexdigest()[:8], 16)
             try:
-                out['emitters'].append(emitter_data(archive, converter, edoc, template[1], ename.split('/')[-1],
-                                                    entity.get('Transform'), float(entity.get('StartDelay', 0) or 0), seed))
+                if gpu:
+                    data = emitter_data(archive, converter, edoc, gpu_template(template[1]), ename.split('/')[-1],
+                                        entity.get('Transform'), float(entity.get('StartDelay', 0) or 0), seed,
+                                        _gpu_processors(edoc, template[1]), gpu=True)
+                    data['emissive'] = data['emissive'] or float(template[1].get('EmissiveExposureFactor', 0) or 0) > 0
+                else:
+                    data = emitter_data(archive, converter, edoc, template[1], ename.split('/')[-1],
+                                        entity.get('Transform'), float(entity.get('StartDelay', 0) or 0), seed)
+                out['emitters'].append(data)
             except Exception as error:  # one emitter must not lose the effect
                 out['notes'].append('%s: %s' % (ename.split('/')[-1], error))
         elif kind in ('LightEffectEntityData', 'PbrSphereLightEntityData', 'PointLightEntityData', 'SpotLightEntityData'):
@@ -594,8 +764,20 @@ def effect_data(archive, converter, doc, name, seen=None):
     return out
 
 
+def _reach(data):
+    """How far an effect's particles get from its centre, sideways (to space several effects apart)."""
+    reach = 0.5
+    for e in data['emitters']:
+        track = e['particles'].get('track')
+        if track:
+            t = np.asarray(e['transform'])
+            pts = np.asarray(track).reshape(-1, 3) @ t[:3, :3].T + t[:3, 3]
+            reach = max(reach, float(np.percentile(np.abs(pts[:, [0, 2]]), 95)))
+    return min(reach, 30.0)
+
+
 # ---------------- conversion ----------------
-def convert(export_dir, textures, assets, out, gap=4.0):
+def convert(export_dir, textures, assets, out, gap=1.0):
     import gw2_convert
     export_dir, out, assets = Path(export_dir), Path(out), Path(assets)
     inventory = json.loads((export_dir / 'inventory.json').read_text(encoding='utf-8'))
@@ -619,10 +801,12 @@ def convert(export_dir, textures, assets, out, gap=4.0):
         rel = 'effects/frostbite/%s.json' % hashlib.sha1(name.lower().encode()).hexdigest()[:16]
         (assets / rel).parent.mkdir(parents=True, exist_ok=True)
         (assets / rel).write_text(json.dumps(data), encoding='utf-8')
+        reach = _reach(data)
+        x += reach if places else 0.0
         places.append({'kind': 'frostbite_effect', 'name': item['name'],
                        'matrix': [[1, 0, 0, x], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
                        'tags': {'effect': rel, 'source': name, 'level_instance': item['name']}})
-        x += gap
+        x += reach + gap
     if hasattr(converter, 'finish_textures'):
         converter.finish_textures()
     if not places:

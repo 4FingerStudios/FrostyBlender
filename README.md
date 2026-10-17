@@ -1,5 +1,3 @@
-# LOOKING FOR HELP IF YOU WANT TO HELP PLEASE REACH OUT ON DISCORD @ "4fs.sillydev"
-
 # FrostyBlender
 
 Bring maps, characters, customizations, NPCs, props and animations from **Plants vs. Zombies: Garden Warfare**, **Garden Warfare 2** and **Battle for Neighborville** into Blender. FrostyBlender is two parts that work together: a Blender add-on (the Frostbite Map Importer) that does the importing, and a desktop app for browsing everything and sending it to Blender in one click.
@@ -56,7 +54,7 @@ Everything lives in the 3D Viewport sidebar (press **N**). Pick the game with th
 | **Customizations** | A character's cosmetics (heads, hats, face props, arms, bodies…). Leave **Rig to skeleton** on so everything shares one armature. |
 | **NPCs** | Horde, bosses, turrets and vehicles with their costumes, props, weapons and abilities, plus ability objects such as the Chili Bean bomb, Potato Mine, Spikeweed, drones and teleporters. Everything comes rigged. **Spawn at 3D cursor** places them where you want. |
 | **Props** | Single props and buildings from any map. |
-| **Effects** | Explosions, smoke, sparks and muzzle flashes from GW1 and GW2, such as the Chili Bean blast. Each emitter becomes a Geometry Nodes particle object with its flipbook textures, colour and fade curves, plus the effect's lights. Press play to watch it; quads face the scene camera. Heat distortion, ribbons, turbulence and sounds are not ported. |
+| **Effects** | Explosions, smoke, sparks and muzzle flashes from GW1 and GW2, such as the Chili Bean blast. Each emitter becomes a Geometry Nodes particle object with its flipbook textures, colour and fade curves, plus the effect's lights. Press play to watch it; quads face the scene camera. GPU emitters, ribbon trails and motion-stretched sparks are included, with forces following their over-life curves (checked against V0e's VFX Editor plugin). Heat distortion, wind, collisions and sounds are not ported. |
 | **Game shaders** (optional) | Tick **Game shaders** before importing GW1/GW2 maps, characters, NPCs or props. Materials are then wired the way the games' own shaders read their textures, decoded from GW2's compiled shaders: ASM (occlusion, smoothness, metalness), ETT (emissive and tint masks), paint tints by UV quadrant, and the R x A normal maps. Off by default; BFN keeps the default materials. |
 | **Animations** | Animation clips for a character, NPC or ability you imported. The tab names the model each set of clips plays on. Select its armature, pick clips and click **Import selected**. |
 
