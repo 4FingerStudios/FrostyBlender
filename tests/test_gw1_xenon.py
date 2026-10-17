@@ -83,8 +83,13 @@ class FormatChecks(unittest.TestCase):
             np.testing.assert_array_equal(read_attr(raw, 0, 2, 12, 3, 0, endian), expected)
 
     def test_packed_signed_normals(self):
-        raw = struct.pack('>I', 511 | (513 << 10))
-        np.testing.assert_allclose(read_attr(raw, 0, 1, 4, 43, 0, '>'), [[1, -1, 0]])
+        # Independently packed Comp3N_11_11_10 landmarks and fractional components.
+        for endian in ('<', '>'):
+            raw = struct.pack(endian + '3I', 1023 | (1025 << 11),
+                              1024 | (1023 << 11) | (511 << 22),
+                              256 | (1792 << 11) | (513 << 22))
+            expected = [[1, -1, 0], [-1, 1, 1], [256/1023, -256/1023, -1]]
+            np.testing.assert_allclose(read_attr(raw, 0, 3, 4, 43, 0, endian), expected, atol=1e-7)
 
     def test_vertex_bounds_checked(self):
         with self.assertRaises(ValueError):

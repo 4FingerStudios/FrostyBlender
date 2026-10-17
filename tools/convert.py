@@ -81,8 +81,15 @@ def read_attr(geom,base,count,stride,fmt,offset,endian='<'):
     if fmt == 43:
         if base+offset+(count-1)*stride+4>len(geom):raise ValueError('Packed vertex attribute overrun')
         packed=np.ndarray((count,),dtype=endian+'u4',buffer=geom,offset=base+offset,strides=(stride,)).astype(np.uint32)
-        values=np.stack([((packed >> shift)&1023).astype(np.int32) for shift in (0,10,20)],axis=1)
-        return np.maximum(np.where(values>=512,values-1024,values)/511.0,-1).astype(np.float32)
+        # Comp3N_11_11_10 (0x2b), not the 10/10/10 format (0x27).
+        # Format identifiers: FrostySdk/Utils.cs, VertexElementFormat in
+        # https://github.com/CadeEvs/FrostyToolsuite/tree/1.0.6.3
+        values=[]
+        for shift,bits in ((0,11),(11,11),(22,10)):
+            value=((packed >> shift)&((1<<bits)-1)).astype(np.int32)
+            sign=1<<(bits-1)
+            values.append(np.maximum(np.where(value>=sign,value-(1<<bits),value)/(sign-1),-1))
+        return np.stack(values,axis=1).astype(np.float32)
     shapes={1:('f4',1),2:('f4',2),3:('f4',3),4:('f4',4),5:('f2',1),6:('f2',2),7:('f2',3),8:('f2',4),12:('u1',4),13:('u1',4),23:('u2',4)}
     if fmt not in shapes:raise ValueError(f'Unsupported vertex format {fmt}')
     typ,n=shapes[fmt];size=np.dtype(typ).itemsize

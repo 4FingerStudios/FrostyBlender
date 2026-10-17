@@ -52,6 +52,8 @@ Xenon texture exports untile and byte-swap the highest-resolution 2D mip before 
 
 Run synthetic PC/Xenon format regression checks with `python -m unittest discover -s tests -p test_gw1_xenon.py -v`. Fixtures are generated in memory and contain no game assets.
 
+Material imports select the diffuse image for Solid view's Texture display, keep color and data uses of the same image in separate color spaces, and apply tint once. Xenon mesh normals use signed 11/11/10 decoding. Reimport older exports from the game to regenerate their mesh normals. Blender material checks can be run with `blender --background --factory-startup --python-exit-code 1 --python tests/blender_material_checks.py`.
+
 Everything lives in the 3D Viewport sidebar (press **N**). Pick the game with the **GW1 / GW2 / BFN** buttons, then click the scan button. The first scan of a game can take up to a minute; after that it's quick.
 
 | Tab | What it does |

@@ -172,4 +172,9 @@ def build(mat, doc, image):
 
     if base and cutoff >= 0:
         t.link(t.math('GREATER_THAN', base.outputs['Alpha'], cutoff), bsdf.inputs['Alpha'])
+    for node in t.nodes:
+        node.select = False
+    if base:
+        base.select = True
+        t.nodes.active = base
     return True

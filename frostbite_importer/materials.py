@@ -93,7 +93,8 @@ def build_material(mat, doc, image, game_shaders=False):
         if build_game(mat, doc, image):
             return
     params = doc.get('parameters') or [[1, 1, 1, 1], [.7, 0, 1, 0], [1, 1, 0, 0], [0, 0, 0, 0]]
-    tint = [a * b for a, b in zip(params[0], doc.get('tint', [1, 1, 1, 1]))]
+    # `tint` and parameters[0] describe the same colour in GW exports.
+    tint = doc.get('tint') or params[0]
     surface, tiling = params[1], params[2]
     textures = doc.get('textures', {})
     cutoff = doc.get('alpha_cutoff', -1)
@@ -115,6 +116,7 @@ def build_material(mat, doc, image, game_shaders=False):
     link(uvmap.outputs['UV'], tile.inputs[0])
 
     base = nodes.new('ShaderNodeTexImage')
+    base.label = 'Base Color'
     base.image = image(textures.get('base'), False) or placeholder('frostbite_white', (1, 1, 1, 1))
     base.location = (-450, 200)
     normal_image = image(textures.get('normal'), True) if float(surface[2]) > .5 else None
@@ -147,3 +149,8 @@ def build_material(mat, doc, image, game_shaders=False):
         mask.image = image(textures['mask'], True)
         mask.label = 'Mask (unused by Aura shader)'
         mask.location = (-450, -500)
+    # Solid/Texture view uses the active image, independently of BSDF links.
+    for node in nodes:
+        node.select = False
+    base.select = True
+    nodes.active = base

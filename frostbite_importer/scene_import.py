@@ -80,8 +80,15 @@ class Importer:
         image = None
         if path.is_file():
             image = bpy.data.images.load(str(path), check_existing=True)
-            if non_color:
-                image.colorspace_settings.name = 'Non-Color'
+            colorspace = 'Non-Color' if non_color else 'sRGB'
+            if image.colorspace_settings.name != colorspace:
+                # Blender's check_existing ignores colour space. A single file
+                # can be bound as both diffuse and data (GW1's Grave Digger eyes).
+                # Never change the colour interpretation of an existing binding.
+                referenced = image.users or any(i == image for i in self.images.values())
+                if referenced:
+                    image = image.copy()
+                image.colorspace_settings.name = colorspace
         else:
             self.warnings.append('Missing texture ' + rel)
         self.images[key] = image
@@ -99,6 +106,7 @@ class Importer:
         name = Path(doc.get('name') or rel or 'frostbite_default').name
         mat = bpy.data.materials.new(name[:60])
         mat['frostbite_material'] = rel or ''
+        mat['frostbite_assets'] = str(self.assets.resolve())
         if doc.get('shader_name'):
             mat['frostbite_shader'] = doc['shader_name']
         build_material(mat, doc, self.image, self.game_shaders)
