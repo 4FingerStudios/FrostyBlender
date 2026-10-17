@@ -3,8 +3,8 @@
     python build.py [--blender PATH_TO_BLENDER_EXE] [--no-types] [--no-app]
 
 Needs Windows, Python 3, CMake and Visual Studio (C++ workload) to build the texture reader,
-and Blender 4.2+ to pack the extension. Writes dist/frostbite_importer-<version>-windows-x64.zip,
-plus, when the .NET 8 SDK is installed, dist/FrostyBlender-<version>-windows-x64.exe (the desktop
+and Blender 4.2+ to pack the extension. Writes dist/v<version>/frostbite_importer-<version>-windows-x64.zip,
+plus, when the .NET 8 SDK is installed, dist/v<version>/FrostyBlender-<version>-windows-x64.exe (the desktop
 app, one self-contained file). The zip needs nothing else on the player's PC: the import tools run on Blender's own Python, and
 the zip carries them, the reader (static C++ runtime) and the BFN type name table.
 
@@ -114,7 +114,9 @@ def main():
     types = not a.no_types and TYPES.is_file()
     blender = find_blender(a.blender)
     ver = version()
-    DIST.mkdir(exist_ok=True)
+    global DIST
+    DIST = DIST / ('v' + ver)  # one folder per release: dist/v1.10.0/
+    DIST.mkdir(parents=True, exist_ok=True)
     target = DIST / ('frostbite_importer-%s-windows-x64.zip' % ver)
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
