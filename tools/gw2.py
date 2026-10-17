@@ -18,9 +18,10 @@ LIMIT = 512 * 1024 * 1024
 
 
 class Reader:
-    def __init__(self, data):
+    def __init__(self, data, endian=None):
         self.data = data
         self.at = 0
+        self.endian = endian
 
     def take(self, size):
         if size < 0 or size > len(self.data) - self.at:
@@ -30,6 +31,8 @@ class Reader:
         return value
 
     def number(self, fmt):
+        if self.endian and fmt[0] in '<>':
+            fmt = self.endian + fmt[1:]
         return struct.unpack(fmt, self.take(struct.calcsize(fmt)))[0]
 
     def varint(self):
@@ -133,6 +136,17 @@ def guid_big(data):
     return (data[:4][::-1] + data[4:6][::-1] + data[6:8][::-1] + data[8:]).hex()
 
 
+def mesh_chunk_guids(data):
+    """Geometry references in PC 64-bit and Xenon 32-bit MeshSet headers."""
+    if len(data) < 40:
+        return []
+    lod = struct.unpack_from('<Q', data, 32)[0]
+    if 0 < lod and lod + 112 <= len(data):
+        return [data[lod + offset:lod + offset + 16].hex() for offset in (96, 88)]
+    lod = struct.unpack_from('>I', data, 32)[0]
+    return [guid_big(data[lod + 68:lod + 84])] if 0 < lod and lod + 84 <= len(data) else []
+
+
 def bundle(data):
     r = Reader(data)
     header = [r.number('>I') for _ in range(9)]
@@ -161,7 +175,9 @@ def bundle(data):
         guid = guid_big(r.take(16))
         lo, size = r.number('>I'), r.number('>I')
         assets.append({'kind': 'chunk', 'guid': guid, 'name': guid,
-                       'original_size': (lo & 65535) | size,
+                       # Xenon mip tails can start halfway through a 64 KiB block. The
+                       # prefix and logical size may overlap in bit positions, so add them.
+                       'original_size': (lo & 65535) + size,
                        'sha1': hashes[len(assets)]})
     r.at = offset + 4
     return assets, r
@@ -374,7 +390,8 @@ def dependency_index(game):
                         kind = struct.unpack_from('<H', mapping, at + 4)[0]
                         packed = struct.unpack_from('>H', mapping, at + 6)[0] | ((kind >> 8 & 15) << 16)
                         if not decoded or decoded > remaining:
-                            raise ValueError('Invalid GW2 dependency block length')
+                            raise ValueError(f'Invalid dependency block length in {source.name}: {asset["name"]} '
+                                             f'at {at:#x}, decoded {decoded}, remaining {remaining}')
                         at += 8 + (decoded if kind & 127 == 0 else packed)
                         remaining -= decoded
                         if at > start + size:
@@ -384,7 +401,8 @@ def dependency_index(game):
                         sha = asset['sha1']
                         if sha not in guid_by_hash:
                             first = block(Reader(mapping[begin:at])) if at > begin else b''
-                            guid_by_hash[sha] = first[40:56].hex() if len(first) >= 56 else ''
+                            guid_by_hash[sha] = (guid_big(first[40:56]) if first[:4] in (b'\x0f\xb2\xd1\xce', b'\x0f\xb4\xd1\xce')
+                                                 else first[40:56].hex()) if len(first) >= 56 else ''
                         key = guid_by_hash[sha]
                     else:
                         key = asset.get('resource_id', asset.get('guid'))
@@ -404,7 +422,7 @@ def cached_dependency_index(game):
     import os
     import pickle
     tocs = sorted((Path(game) / 'Data/Win32').rglob('*.toc'))
-    key = hashlib.sha256(repr([str(Path(game).resolve())] + [(str(t), t.stat().st_size, t.stat().st_mtime_ns)
+    key = hashlib.sha256(repr(['endian-v2', str(Path(game).resolve())] + [(str(t), t.stat().st_size, t.stat().st_mtime_ns)
                                                               for t in tocs]).encode()).hexdigest()[:24]
     folder = Path(os.environ.get('AURA_IMPORT_CACHE') or Path(os.environ.get('LOCALAPPDATA') or Path.home()) / 'aura-frostbite')
     path = folder / ('dependencies_%s.pickle' % key)
@@ -489,11 +507,9 @@ def complete_dependencies(game, output, inventory):
             found = obtain('resource', resource)
             if found and doc['root_type'] in ('RigidMeshAsset', 'CompositeMeshAsset', 'SkinnedMeshAsset'):
                 mesh = found[1]
-                lod = struct.unpack_from('<Q', mesh, 32)[0]
-                # GW2 names the geometry chunk at LOD + 96; Garden Warfare 1 at LOD + 88.
-                guid = next((g for g in (mesh[lod + 96:lod + 112].hex(), mesh[lod + 88:lod + 104].hex())
-                             if g in indexes['chunk'] or g in chunks), mesh[lod + 96:lod + 112].hex())
-                if guid not in chunks:
+                candidates = mesh_chunk_guids(mesh)
+                guid = next((g for g in candidates if g in indexes['chunk'] or g in chunks), '')
+                if guid and guid not in chunks:
                     chunks.add(guid)
                     obtain('chunk', guid)
     print('GW2 referenced assets:', len(inventory['assets']), flush=True)
@@ -502,7 +518,8 @@ def complete_dependencies(game, output, inventory):
 class Ebx:
     """Self-describing legacy EBX v2/v4 (GW2 uses v2)."""
     def __init__(self, data):
-        self.r = Reader(data)
+        self.endian = '>' if data[:4] in (b'\x0f\xb2\xd1\xce', b'\x0f\xb4\xd1\xce') else '<'
+        self.r = Reader(data, self.endian)
         r = self.r
         magic = r.number('<I')
         if magic not in (0x0fb2d1ce, 0x0fb4d1ce):
@@ -512,14 +529,14 @@ class Ebx:
         instances, exported, unique, classes, fields, names_size = (r.number('<H') for _ in range(6))
         strings_size, arrays, data_size = (r.number('<I') for _ in range(3))
         self.arrays_offset = self.strings + strings_size + data_size
-        self.file_guid = r.take(16).hex()
+        self.file_guid = self.guid(r.take(16))
         if magic == 0x0fb4d1ce:
             r.take(8)
         else:
             self.align(16)
         if imports > len(data) // 32 or self.strings + length > len(data):
             raise ValueError('Invalid GW2 EBX lengths')
-        self.imports = [{'file': r.take(16).hex(), 'object': r.take(16).hex()} for _ in range(imports)]
+        self.imports = [{'file': self.guid(r.take(16)), 'object': self.guid(r.take(16))} for _ in range(imports)]
         names = {}
         end = r.at + names_size
         while r.at < end:
@@ -530,26 +547,26 @@ class Ebx:
             names[h] = name
         self.fields = []
         for _ in range(fields):
-            h, flags, ref, offset, extra = struct.unpack('<IHHII', r.take(16))
+            h, flags, ref, offset, extra = struct.unpack(self.endian + 'IHHII', r.take(16))
             kind = ((flags >> (1 if magic == 0x0fb4d1ce else 0)) >> 4) & 31
             self.fields.append((names.get(h, f'field_{h:08x}'), kind, ref, offset))
         self.classes = []
         for _ in range(classes):
-            h, index, count, alignment, flags, size, extra = struct.unpack('<IIBBHHH', r.take(16))
+            h, index, count, alignment, flags, size, extra = struct.unpack(self.endian + 'IIBBHHH', r.take(16))
             alignment &= 127  # High bit marks descriptors such as GW2 enums.
             if not alignment or alignment & (alignment - 1) or index + count > fields:
                 raise ValueError('Invalid GW2 EBX class descriptor')
             self.classes.append((names.get(h, f'class_{h:08x}'), index, count, alignment, size))
         self.instances = [(r.number('<H'), r.number('<H'), i < exported) for i in range(instances)]
         self.align(16)
-        self.arrays = [struct.unpack('<III', r.take(12)) for _ in range(arrays)]
+        self.arrays = [struct.unpack(self.endian + 'III', r.take(12)) for _ in range(arrays)]
         r.at = self.strings + strings_size
         self.objects = []
         for ref, count, is_exported in self.instances:
             for _ in range(count):
                 cls = self.classes[ref]
                 self.align(cls[3])
-                guid = r.take(16).hex() if is_exported else '0' * 32
+                guid = self.guid(r.take(16)) if is_exported else '0' * 32
                 if cls[3] != 4:
                     r.take(8)
                 base = r.at - 8
@@ -558,6 +575,9 @@ class Ebx:
                 self.objects.append(obj)
                 r.at = base + cls[4]
                 self.align(cls[3])
+
+    def guid(self, data):
+        return guid_big(data) if self.endian == '>' else data.hex()
 
     def align(self, alignment):
         self.r.at = (self.r.at + alignment - 1) & -alignment
@@ -617,7 +637,7 @@ class Ebx:
         if kind == 23:
             return {'$resource': str(r.number('<Q'))}
         if kind in (21, 22):
-            return r.take(16 if kind == 21 else 20).hex()
+            return self.guid(r.take(16)) if kind == 21 else r.take(20).hex()
         if kind == 26:
             return {'$boxed': r.take(16).hex()}
         formats = {8: '<i', 10: 'B', 11: 'b', 12: 'B', 13: '<h', 14: '<H', 15: '<i',
@@ -628,7 +648,7 @@ class Ebx:
         return bool(value) if kind == 10 else value
 
     def document(self):
-        return {'guid': self.file_guid, 'root_type': self.objects[0]['$type'] if self.objects else '',
+        return {'guid': self.file_guid, 'endian': self.endian, 'root_type': self.objects[0]['$type'] if self.objects else '',
                 'imports': self.imports, 'objects': self.objects}
 
 

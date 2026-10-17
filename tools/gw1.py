@@ -92,6 +92,10 @@ def export(game, package, output):
 def finish(game, output, inventory):
     game, output = Path(game), Path(output)
     inventory['profile'] = 'gw1'
+    from gw1_xenon import TEXTURE as XENON_TEXTURE, texture as xenon_texture
+    xenon = any(a.get('resource_type') == XENON_TEXTURE or a.get('bundle', '').lower().startswith('xenon/')
+                for a in inventory['assets'])
+    inventory['platform'] = 'xenon' if xenon else 'win32'
     index = {}
     for base in (game / 'Data/Win32', game / 'Update/Patch/Data/Win32'):
         for toc in sorted(base.glob('*chunks.toc')):
@@ -137,10 +141,10 @@ def finish(game, output, inventory):
         if asset.get('resource_type') != MESHSET or 'bytes' not in asset:
             continue
         mesh = (output / asset['path']).read_bytes()
-        lod = struct.unpack_from('<Q', mesh, 32)[0] if len(mesh) >= 40 else 0
-        if not lod or lod + 104 > len(mesh):
+        candidates = gw2.mesh_chunk_guids(mesh)
+        if not candidates:
             continue
-        guid = mesh[lod + 88:lod + 104].hex()
+        guid = candidates[-1]
         if guid != '0' * 32 and 'bytes' not in chunks.get(guid, {}):
             try:
                 fetch(guid)
@@ -173,12 +177,13 @@ def finish(game, output, inventory):
     print('GW1 terrain chunks:', tiles, flush=True)
     fetched = 0
     for asset in inventory['assets']:
-        if asset.get('resource_type') != GW1_TEXTURE or 'bytes' not in asset:
+        if asset.get('resource_type') not in (GW1_TEXTURE, XENON_TEXTURE) or 'bytes' not in asset:
             continue
         header = (output / asset['path']).read_bytes()
-        guid = header[28:44].hex()
+        is_xenon = asset['resource_type'] == XENON_TEXTURE
+        guid = gw2.guid_big(header[28:44]) if is_xenon else header[28:44].hex()
         item = chunks.get(guid)
-        full = sum(struct.unpack_from('<15I', header, 44)[:min(header[26], 15)])
+        full = sum(struct.unpack_from(('>' if is_xenon else '<') + '15I', header, 44)[:min(header[26], 15)])
         try:
             if item is None or item.get('bytes') != full:
                 try:  # streaming TOCs first, then any bundle (menu art lives only in bundles)
@@ -190,11 +195,22 @@ def finish(game, output, inventory):
             if item is None or 'bytes' not in item:
                 raise ValueError('GW1 texture chunk unavailable')
             # The original header stays in place, so the fix-up can run again on the same export.
-            converted = texture_header(header, item['bytes'])
+            if is_xenon:
+                converted, linear = xenon_texture(header, (output / item['path']).read_bytes())
+                # Keep original tiled chunks intact, so normalization can be rerun safely.
+                item = dict(item, path='chunk/linear-%s.bin' % guid, bytes=len(linear))
+                (output / item['path']).write_bytes(linear)
+                chunks[guid] = item
+                inventory['assets'].append(item)
+            else:
+                converted = texture_header(header, item['bytes'])
             asset['path'] = asset['path'][:-len('.bin')] + '.texture.bin'
             (output / asset['path']).write_bytes(converted)
             asset['resource_type'] = TEXTURE
-            asset['source_format'] = struct.unpack_from('<I', header, 12)[0]
+            if is_xenon:
+                asset['metadata'] = list(struct.pack('<4I', 11, 0, 0, 0))
+                asset['bytes'] = len(converted)
+            asset['source_format'] = struct.unpack_from(('>' if is_xenon else '<') + 'I', header, 12)[0]
         except (ValueError, OSError, struct.error) as error:
             asset['error'] = str(error)
             inventory['errors'].append({'name': asset['name'], 'stage': 'texture', 'error': str(error)})

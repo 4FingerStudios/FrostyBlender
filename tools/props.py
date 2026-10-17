@@ -90,7 +90,8 @@ def discover(game):
         for entry in module.discover(game):
             meshes = _gw_level_meshes(game, entry['package'])
             # EBX names drop the bundle ID's platform folder.
-            dbs = sorted({re.sub(r'^win32/', '', b, flags=re.I) + '/meshvariationdb_win32' for _, b in meshes.values()})
+            dbs = sorted({re.sub(r'^(?:win32|xenon)/', '', b, flags=re.I) + '/meshvariationdb_' + b.split('/')[0].lower()
+                          for _, b in meshes.values()})
             maps.append((entry, meshes, dbs))
     result = []
     for entry, meshes, dbs in maps:

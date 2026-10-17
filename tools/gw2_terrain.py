@@ -1,18 +1,19 @@
 """GW2 v256 terrain streaming trees and their visual heightfield tiles."""
 import struct
 import numpy as np
-from gw2 import Reader, LIMIT
+from gw2 import Reader, LIMIT, guid_big
 
 
 def terrain_tree(data):
-    if len(data) < 108 or struct.unpack_from('<I', data)[0] != 256:
+    endian = '>' if data[:4] == b'\0\0\1\0' else '<'
+    if len(data) < 108 or struct.unpack_from(endian + 'I', data)[0] != 256:
         raise ValueError('Unsupported GW2 terrain streaming tree version')
-    scale = struct.unpack_from('<f', data, 47)[0]
-    expected = struct.unpack_from('<I', data, 88)[0]
+    scale = struct.unpack_from(endian + 'f', data, 47)[0]
+    expected = struct.unpack_from(endian + 'I', data, 72 if endian == '>' else 88)[0]
     if not np.isfinite(scale) or not 0 < scale <= 1e7 or not 0 < expected <= 1000000:
         raise ValueError('Invalid GW2 terrain header')
-    r = Reader(data)
-    r.at = 108
+    r = Reader(data, endian)
+    r.at = 92 if endian == '>' else 108
     count = 0
     def bit():
         value = r.number('B')
@@ -24,7 +25,7 @@ def terrain_tree(data):
         count += 1
         if count > expected or depth > 16:
             raise ValueError('GW2 terrain bounds tree exceeds limits')
-        box = struct.unpack('<6f', r.take(24))
+        box = struct.unpack(endian + '6f', r.take(24))
         if not all(np.isfinite(box)) or any(box[i] > box[i+3] for i in range(3)):
             raise ValueError('Invalid GW2 terrain bounds')
         if bit():
@@ -35,14 +36,14 @@ def terrain_tree(data):
             r.take(85 * 4)
         if inline:
             # Garden Warfare 1 stores its root heightfield page inline; tiles cover it.
-            r.take(HEIGHT_PAGE)
+            r.take(36534 if endian == '>' else HEIGHT_PAGE)
         if bit():
             for _ in range(4):
                 bounds_node(depth+1)
         return box
     box = bounds_node()
     if count != expected:
-        raise ValueError('GW2 terrain bounds node count mismatch')
+        raise ValueError(f'Terrain bounds node count mismatch: {count} != {expected} at {r.at}')
     samples = None
     seen = set()
     while True:
@@ -61,7 +62,7 @@ def terrain_tree(data):
         if kind == 1:
             if len(raster) < 8:
                 raise ValueError('Truncated GW2 terrain height raster')
-            samples, pixel_size = struct.unpack_from('<II', raster)
+            samples, pixel_size = struct.unpack_from(endian + 'II', raster)
             if pixel_size != 2 or samples < 4 or samples > 258 or (samples-2) & (samples-3):
                 raise ValueError('Unsupported GW2 height raster layout')
     if samples is None:
@@ -69,7 +70,8 @@ def terrain_tree(data):
     tiles = []
     def descriptor():
         size = r.number('<I')
-        guid = r.take(16).hex()
+        raw = r.take(16)
+        guid = guid_big(raw) if endian == '>' else raw.hex()
         if size > LIMIT or bool(size) != (guid != '0'*32):
             raise ValueError('Invalid GW2 terrain chunk descriptor')
         return size, guid
@@ -92,7 +94,7 @@ def terrain_tree(data):
     root = tile_node((box[0], box[2], box[3], box[5]))
     if r.at != len(data):
         raise ValueError('GW2 terrain tile tree has trailing data')
-    return {'root': root, 'tiles': tiles, 'scale': scale, 'samples': samples, 'bounds': box}
+    return {'root': root, 'tiles': tiles, 'scale': scale, 'samples': samples, 'bounds': box, 'endian': endian}
 
 
 # A tile chunk concatenates the layers that tile stores: an optional height
@@ -102,10 +104,11 @@ def terrain_tree(data):
 HEIGHT_PAGE, WIDE_PAGE, MASK_PAGE = 37759, 33800, 4356
 
 
-def has_height_page(size, side):
+def has_height_page(size, side, endian='<'):
     if size == side * side * 2:
         return True
-    return any(size - HEIGHT_PAGE - k * WIDE_PAGE >= 0 and (size - HEIGHT_PAGE - k * WIDE_PAGE) % MASK_PAGE == 0
+    page, wide = (36534, 8712) if endian == '>' else (HEIGHT_PAGE, WIDE_PAGE)
+    return any(size - page - k * wide >= 0 and (size - page - k * wide) % MASK_PAGE == 0
                for k in range(4))
 
 
@@ -119,8 +122,8 @@ def tile_heights(raw, tile, tree, parent=None):
     if raw is not None:
         if len(raw) != tile['size']:
             raise ValueError('Truncated GW2 visual terrain heightfield')
-        if len(raw) >= side * side * 2 and has_height_page(len(raw), side):
-            own = np.frombuffer(raw, '<u2', count=side*side).reshape(side, side)[2:-2, 2:-2].astype(np.float32)
+        if len(raw) >= side * side * 2 and has_height_page(len(raw), side, tree.get('endian', '<')):
+            own = np.frombuffer(raw, tree.get('endian', '<') + 'u2', count=side*side).reshape(side, side)[2:-2, 2:-2].astype(np.float32)
     inherited = None
     if parent is not None:
         heights, (px, pz, pX, pZ) = parent

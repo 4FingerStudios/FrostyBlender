@@ -22,7 +22,7 @@ import cosmetics
 from cosmetics import bundle_names, game_kind, title
 from icons import norm
 
-GW1_AI = re.compile(r'^win32/_pvz/animations/characters/ai/([^/]+)/(?:([^/]+)/)?([^/]+)_bpb$')
+GW1_AI = re.compile(r'^(?:win32|xenon)/_pvz/animations/characters/ai/([^/]+)/(?:([^/]+)/)?([^/]+)_bpb$')
 GW_NPC = re.compile(r'^win32/(?:gw2_)?characters(?:_cu\d+)?/(plants?|zombie|gnome)/(.+)_bpb$')
 GROUPS = {'horde': 'Horde', 'boss': 'Boss', 'subboss': 'Boss', 'turret': 'Deployable', 'vehicle': 'Vehicle'}
 # GW1 keeps every AI character in one folder; these are the plant side.

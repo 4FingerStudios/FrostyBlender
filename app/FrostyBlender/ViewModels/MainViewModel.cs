@@ -62,6 +62,7 @@ public partial class MainViewModel : ObservableObject
         _timer.Start();
         _ = Tick();
         if (LinkLoaded) _ = Scan(false);
+        InitializeUpdates();
     }
 
     public IReadOnlyList<NavItem> Nav { get; } = new[]
@@ -698,6 +699,7 @@ public partial class MainViewModel : ObservableObject
             }
         }
         var ping = await _link.Get("/ping");
+        RefreshAddonConnection(ping);
         Connected = ping != null;
         BlenderStatus = Connected
             ? $"Blender {Str(ping, "blender_version")} connected"

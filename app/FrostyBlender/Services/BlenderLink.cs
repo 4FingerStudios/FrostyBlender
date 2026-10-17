@@ -75,9 +75,13 @@ public sealed class BlenderLink
     }
 
     /// <summary>Sends an import; returns the job id, or throws with the reason.</summary>
-    public async Task<string> Import(JsonObject body)
+    public Task<string> Import(JsonObject body) => Submit("/import", body);
+
+    public Task<string> UpdateAddon(JsonObject body) => Submit("/addon-update", body);
+
+    private async Task<string> Submit(string path, JsonObject body)
     {
-        var request = Request(HttpMethod.Post, "/import");
+        using var request = Request(HttpMethod.Post, path);
         request.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
         HttpResponseMessage response;
         try
@@ -88,6 +92,7 @@ public sealed class BlenderLink
         {
             throw new InvalidOperationException("Blender isn't running with the FrostyBlender add-on. Open Blender and try again.");
         }
+        using var ownedResponse = response;
         var text = await response.Content.ReadAsStringAsync();
         var node = JsonNode.Parse(text)?.AsObject();
         if (!response.IsSuccessStatusCode || node?["ok"]?.GetValue<bool>() != true)

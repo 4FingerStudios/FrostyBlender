@@ -148,6 +148,7 @@ ATLAS_RESOURCE = 0x957C32B1  # AtlasTexture: format, width, height, then the chu
 def _atlas_chunks(game, kind, output, inventory, index):
     """Atlas (flipbook) textures keep their pixels in a chunk that the texture path does not fetch."""
     have = {a['guid'] for a in inventory['assets'] if a['kind'] == 'chunk'}
+    xenon = inventory.get('platform') == 'xenon'
     toc = {}
     if kind == 'gw1':
         for base in (game / 'Data/Win32', game / 'Update/Patch/Data/Win32'):
@@ -160,8 +161,8 @@ def _atlas_chunks(game, kind, output, inventory, index):
         header = (output / asset['path']).read_bytes()
         if len(header) < 32:
             continue
-        guid = header[16:32].hex()
-        if guid in have:
+        guid = gw2.guid_big(header[16:32]) if xenon else header[16:32].hex()
+        if guid in have and not xenon:
             continue
         content = None
         if guid in index['chunk']:
@@ -179,6 +180,14 @@ def _atlas_chunks(game, kind, output, inventory, index):
         if content is None:
             inventory['errors'].append({'name': asset['name'], 'stage': 'atlas', 'error': 'pixel chunk %s not found' % guid})
             continue
+        if xenon:
+            # Atlas textures use linear BC payloads on Xenon (unlike TextureAsset's tiling).
+            content = np.frombuffer(content, np.uint8).reshape(-1, 2)[:, ::-1].copy().tobytes()
+            normalized = bytearray(header)
+            struct.pack_into('<HH', normalized, 2, *struct.unpack_from('>HH', header, 2))
+            normalized[16:32] = bytes.fromhex(guid)
+            asset['path'] = asset['path'][:-4] + '.atlas.bin'
+            (output / asset['path']).write_bytes(normalized)
         rel = 'chunk/%s.bin' % hashlib.sha1(content).hexdigest()
         (output / rel).parent.mkdir(parents=True, exist_ok=True)
         (output / rel).write_bytes(content)

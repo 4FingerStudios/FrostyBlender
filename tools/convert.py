@@ -77,12 +77,17 @@ def matrix(value):
         v=value.get(k,value.get(k.capitalize(),{}));m[:3,i]=[v.get(c,0) for c in ['x','y','z']]
     return m
 
-def read_attr(geom,base,count,stride,fmt,offset):
+def read_attr(geom,base,count,stride,fmt,offset,endian='<'):
+    if fmt == 43:
+        if base+offset+(count-1)*stride+4>len(geom):raise ValueError('Packed vertex attribute overrun')
+        packed=np.ndarray((count,),dtype=endian+'u4',buffer=geom,offset=base+offset,strides=(stride,)).astype(np.uint32)
+        values=np.stack([((packed >> shift)&1023).astype(np.int32) for shift in (0,10,20)],axis=1)
+        return np.maximum(np.where(values>=512,values-1024,values)/511.0,-1).astype(np.float32)
     shapes={1:('f4',1),2:('f4',2),3:('f4',3),4:('f4',4),5:('f2',1),6:('f2',2),7:('f2',3),8:('f2',4),12:('u1',4),13:('u1',4),23:('u2',4)}
     if fmt not in shapes:raise ValueError(f'Unsupported vertex format {fmt}')
     typ,n=shapes[fmt];size=np.dtype(typ).itemsize
     if base+offset+(count-1)*stride+n*size>len(geom):raise ValueError('Vertex attribute overrun')
-    values=np.ndarray((count,n),dtype='<'+typ,buffer=geom,offset=base+offset,strides=(stride,size)).astype(np.float32)
+    values=np.ndarray((count,n),dtype=endian+typ,buffer=geom,offset=base+offset,strides=(stride,size)).astype(np.float32)
     if fmt==13:values/=255
     return values
 

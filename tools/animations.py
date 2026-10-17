@@ -30,8 +30,19 @@ LEVELS = {'gw1': 'Win32/_pvz/Levels/Mainstreet/Level_COOP_Mainstreet/Level_COOP_
           'bfn': 'level_picnic_root'}
 
 
+def level_for(game, kind):
+    preferred = LEVELS[kind]
+    if kind != 'gw1' or (Path(game) / 'Data' / (preferred + '.toc')).is_file():
+        return preferred
+    import gw1
+    levels = gw1.discover(game)
+    if not levels:
+        raise ValueError('No GW1 levels found for animation banks')
+    return max(levels, key=lambda level: (Path(game) / 'Data' / (level['package'] + '.sb')).stat().st_size)['package']
+
+
 def cache_dir(game, kind):
-    key = hashlib.sha256(('%s|%s|%s' % (Path(game).resolve(), kind, LEVELS[kind])).encode()).hexdigest()[:16]
+    key = hashlib.sha256(('%s|%s|%s|xenon-v1' % (Path(game).resolve(), kind, level_for(game, kind))).encode()).hexdigest()[:16]
     base = Path(os.environ.get('AURA_IMPORT_CACHE') or Path(os.environ.get('LOCALAPPDATA') or Path.home()) / 'aura-frostbite')
     return base / ('ant_%s_%s' % (kind, key))
 
@@ -65,7 +76,7 @@ def extract_banks(game, kind, folder):
                     path.write_bytes(archive.fetch(a['ref']))
                     out.append(path)
         return out
-    toc = Path(game) / 'Data' / (LEVELS[kind] + '.toc')
+    toc = Path(game) / 'Data' / (level_for(game, kind) + '.toc')
     for desc, raw, decoded in gw2.bundles_with_patches(Path(game), toc):
         try:
             assets, r = gw2.bundle(raw)
@@ -90,7 +101,7 @@ def banks(game, kind):
     if not found:
         found = extract_banks(game, kind, folder)
         if not found:
-            raise ValueError('No animation banks found in ' + LEVELS[kind])
+            raise ValueError('No animation banks found in ' + level_for(game, kind))
         print('Extracted %d animation banks' % len(found), flush=True)
     return found
 
@@ -141,7 +152,7 @@ def discover(game):
         entry = characters.setdefault(rig['__name'], {'rig': rig['__name'], 'name': character_of(rig['__name']), 'clips': []})
         entry['clips'].append({'name': clean(db.clip_name(anim)), 'key': anim['__guid'], 'frames': anim.get('NumKeys', 0),
                                'fps': fps, 'additive': bool(anim.get('Additive'))})
-    result = {'game': kind, 'level': LEVELS[kind],
+    result = {'game': kind, 'level': level_for(game, kind),
               'characters': sorted((c for c in characters.values() if len(c['clips']) >= 3), key=lambda c: c['name'].lower())}
     for c in result['characters']:
         c['clips'].sort(key=lambda x: x['name'].lower())

@@ -9,6 +9,7 @@ an import from the app behaves exactly like one from the tab.
     GET  /status      each tab's status line and whether an import is running
     GET  /armatures   armatures in the scene (animation targets), active one first
     POST /import      {"kind": "maps|cosmetics|npcs|props|effects|animations", "game": "GW1|GW2|BFN", ...}
+    POST /addon-update {"archive": "...zip", "digest": "sha256:...", "version": "..."}
 
 Requests must carry the X-FrostyBlender header and no Origin header, so a web page in a
 browser cannot drive Blender. link.json (in %LOCALAPPDATA%/FrostyBlender) tells the app the
@@ -37,12 +38,20 @@ def link_dir():
     return Path(os.environ.get('LOCALAPPDATA') or Path.home()) / 'FrostyBlender'
 
 
-def _version():
+def _read_version():
     try:
         manifest = Path(__file__).with_name('blender_manifest.toml').read_text(encoding='utf-8')
         return next(line.split('"')[1] for line in manifest.splitlines() if line.startswith('version'))
     except (OSError, StopIteration, IndexError):
         return ''
+
+
+_loaded_version = _read_version()
+_restart_required = None
+
+
+def _version():
+    return _loaded_version  # Files on disk can be newer than the code running until restart.
 
 
 def write_link(port):
@@ -95,7 +104,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._allowed():
             return
         if self.path == '/ping':
-            self._send(200, {'ok': True, 'addon_version': _version(), 'blender_version': bpy.app.version_string})
+            self._send(200, {'ok': True, 'addon_version': _version(), 'blender_version': bpy.app.version_string,
+                             'addon_update': True, 'restart_required': _restart_required})
         elif self.path == '/status':
             self._send(200, {'ok': True, 'tabs': _snapshot.get('tabs', {}), 'jobs': _jobs})
         elif self.path == '/armatures':
@@ -106,7 +116,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._allowed():
             return
-        if self.path != '/import':
+        if self.path not in ('/import', '/addon-update'):
             self._send(404, {'ok': False, 'error': 'Not found'})
             return
         try:
@@ -114,7 +124,13 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < size <= 4 << 20:
                 raise ValueError('Bad request size')
             request = json.loads(self.rfile.read(size))
-            if request.get('kind') not in KINDS or request.get('game') not in ('GW1', 'GW2', 'BFN'):
+            if not isinstance(request, dict):
+                raise ValueError('Expected a JSON object')
+            if self.path == '/addon-update':
+                request['kind'] = 'addon_update'
+                if not all(isinstance(request.get(k), str) for k in ('archive', 'digest', 'version')):
+                    raise ValueError('Missing update archive, checksum or version')
+            elif request.get('kind') not in KINDS or request.get('game') not in ('GW1', 'GW2', 'BFN'):
                 raise ValueError('Unknown kind or game')
         except (ValueError, TypeError) as error:
             self._send(400, {'ok': False, 'error': str(error)})
@@ -159,7 +175,7 @@ def _snap():
     _snapshot['tabs'] = {k: {'status': s, 'busy': b} for k, (s, b) in tabs.items()}
     _snapshot['armatures'] = [{'name': o.name, 'bones': len(o.data.bones), 'active': o is active} for o in arms]
     for job in _jobs.values():  # a sent job is done when its tab is idle again
-        if job['state'] == 'running':
+        if job['state'] == 'running' and job['kind'] in tabs:
             status, busy = tabs[job['kind']]
             if not busy:
                 job['state'] = 'failed' if status.startswith(('Failed', 'Blender import failed')) else 'done'
@@ -173,6 +189,18 @@ def _override():
 
 def _run(request):
     """Fill the request's tab and press its Import button; returns an error text or ''."""
+    global _restart_required
+    if _restart_required:
+        return 'Add-on updated. Save your work and restart Blender before importing or updating again.'
+    if request['kind'] == 'addon_update':
+        from . import addon_update
+        _snap()
+        if any(tab['busy'] for tab in _snapshot.get('tabs', {}).values()):
+            return 'Wait for all Blender imports to finish before updating the add-on'
+        _restart_required = addon_update.install(
+            request['archive'], request['digest'], request['version'], _version(), bpy.app.version,
+            link_dir() / 'updates', Path(__file__).resolve().parent)
+        return ''
     from . import animations_ui, cosmetics_ui, effects_ui, npcs_ui, props_ui
     scene, kind, game = bpy.context.scene, request['kind'], request['game']
     options = request.get('options') or {}
@@ -309,6 +337,8 @@ def tick():
                 error = str(exc)
             if error:
                 _jobs[job].update(state='failed', message=error)
+            elif request['kind'] == 'addon_update':
+                _jobs[job].update(state='done', message='Add-on updated. Save your work and restart Blender.')
     except queue.Empty:
         pass
     try:

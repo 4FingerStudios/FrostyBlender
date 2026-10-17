@@ -26,7 +26,7 @@ import gw2
 GW1_EXE, GW2_EXE, BFN_EXE = 'PVZ.Main_Win64_Retail.exe', 'GW2.Main_Win64_Retail.exe', 'PVZBattleforNeighborville.exe'
 # Bundle names: team, character, slot, file. Slots that only hold textures or UI are skipped.
 PATTERNS = {
-    'gw1': re.compile(r'^win32/_pvz/animations/characters/(plants|zombies)/([^/]+)/(?:attachments/)?([^/]+)/([^/]+?)_unlockasset_bpb$'),
+    'gw1': re.compile(r'^(?:win32|xenon)/_pvz/animations/characters/(plants|zombies)/([^/]+)/(?:attachments/)?([^/]+)/([^/]+?)_unlockasset_bpb$'),
     'gw2': re.compile(r'^win32/characters/(plants|zombie)/playable/([^/]+)/([^/]+)/([^/]+?)_(?:att)?unlockasset_bpb$'),
     'bfn': re.compile(r'^win32/characters(?:_cu\d+)?/(plant|zombie)/playable/([^/]+)/([^/]+)/(?:[^/]+/)*([^/]+?)_(?:visualasset|unlockasset)_bpb$'),
 }
@@ -53,11 +53,14 @@ def character_of(kind, bundle):
 
 def item_character(kind, item):
     """The character whose skeleton an item binds to: its own (NPCs name it) or its bundle's."""
+    if kind == 'gw1' and '/browncoatzombie/costumes/browncoatzombie_costumedisco' in (item.get('bundle') or '').lower():
+        return 'discozombie'  # Shares Browncoat's folder, but has its own authored bind pose.
     return item.get('character') or character_of(kind, item.get('bundle') or '')
 
 
 # NPCs whose skeleton sits in another character's folder: tried in order after their own.
 SKELETON_FALLBACKS = {'browncoat': ['browncoatzombie'], 'berzerkerzombie': ['browncoatzombie'],
+                      'gravedigger': ['browncoatzombie'],
                       'goop_shroom': ['fume_shroom'], 'peashooter_turret_fire': ['peashooter_turret_cannon'],
                       'peashooter_turret_ice': ['peashooter_turret_cannon'],
                       'peashooter_turret_repeater': ['peashooter_turret_gatling'],
@@ -84,11 +87,12 @@ def pick_skeleton(names, character, root=None):
     """The character's own SkeletonAsset among EBX names: in its folder, not a master skeleton,
     preferring one under the item's own top folder (BFN keeps GW2's characters beside its own),
     then <character>_skeleton or <character>_default_skeleton, then the shortest path."""
-    found = [n for n in names if n.lower().endswith('skeleton') and '/%s/' % character in n.lower()
+    preferred = ('%s_skeleton' % character, '%s_default_skeleton' % character)
+    found = [n for n in names if n.lower().endswith('skeleton')
+             and ('/%s/' % character in n.lower() or n.lower().rsplit('/', 1)[-1] in preferred)
              and 'master' not in n.lower().rsplit('/', 1)[-1]]
     if not found:  # only a master skeleton ships for some (the Tall-nut, BFN's Potato Mine)
         found = [n for n in names if n.lower().endswith('skeleton') and '/%s/' % character in n.lower()]
-    preferred = ('%s_skeleton' % character, '%s_default_skeleton' % character)
     found.sort(key=lambda n: (bool(root) and not n.lower().startswith(root + '/'),
                               n.lower().rsplit('/', 1)[-1] not in preferred, len(n), n))
     return found

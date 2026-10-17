@@ -32,6 +32,13 @@
 
         <!-- footer -->
         <StackPanel DockPanel.Dock="Bottom" Margin="14,8,14,16" Spacing="4">
+          <Button Classes="accent" Content="Update Blender add-on" Command="{Binding InstallAddonUpdateCommand}"
+                  IsVisible="{Binding AddonUpdateAvailable}" IsEnabled="{Binding !AddonUpdateBusy}" />
+          <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap" Text="{Binding AddonUpdateStatus}" Margin="8,4" />
+          <Button Classes="accent" Content="Update and restart" Command="{Binding InstallUpdateCommand}"
+                  IsVisible="{Binding UpdateAvailable}" IsEnabled="{Binding !UpdateBusy}" />
+          <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap" Text="{Binding UpdateStatus}"
+                     IsVisible="{Binding UpdateAvailable}" Margin="8,4" />
           <Button Classes="link" HorizontalAlignment="Stretch" Command="{Binding OpenCommand}" CommandParameter="https://discord.gg/Vh7cgGzUyB">
             <StackPanel Orientation="Horizontal" Spacing="10">
               <Border Width="22" Height="22" CornerRadius="6" Background="#5865F2">
@@ -287,6 +294,39 @@
           <TextBlock Classes="h1" Text="Settings" />
           <TextBlock Classes="muted" FontSize="13" Text="How FrostyBlender finds Blender and your games." />
         </StackPanel>
+
+        <Border Classes="card">
+          <StackPanel Spacing="14">
+            <TextBlock Classes="eyebrow" Text="APP UPDATES" />
+            <CheckBox Content="Check for updates when FrostyBlender starts" IsChecked="{Binding CheckUpdatesOnStartup}" />
+            <TextBlock Classes="muted" TextWrapping="Wrap" Text="{Binding UpdateStatus}" />
+            <TextBlock Classes="muted" TextWrapping="Wrap"
+                       Text="Update and restart downloads the newest stable desktop app from GitHub and replaces this executable. Finish any imports first." />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="Check for updates" Command="{Binding CheckForUpdatesCommand}" IsEnabled="{Binding !UpdateBusy}" />
+              <Button Classes="accent" Content="Update and restart" Command="{Binding InstallUpdateCommand}"
+                      IsVisible="{Binding UpdateAvailable}" IsEnabled="{Binding !UpdateBusy}" />
+              <Button Content="Releases" Command="{Binding OpenCommand}"
+                      CommandParameter="https://github.com/4FingerStudios/FrostyBlender/releases/latest" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <Border Classes="card">
+          <StackPanel Spacing="14">
+            <TextBlock Classes="eyebrow" Text="BLENDER ADD-ON UPDATES" />
+            <TextBlock Classes="muted" TextWrapping="Wrap" Text="{Binding AddonUpdateStatus}" />
+            <TextBlock Classes="muted" TextWrapping="Wrap"
+                       Text="Downloads and installs the latest stable add-on through Blender. Finish imports first. After installation, save your work and restart Blender. Requires add-on 1.10.2 or newer; older versions need one manual install from Releases." />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="Check add-on updates" Command="{Binding CheckForAddonUpdatesCommand}" IsEnabled="{Binding !AddonUpdateBusy}" />
+              <Button Classes="accent" Content="Update add-on" Command="{Binding InstallAddonUpdateCommand}"
+                      IsVisible="{Binding AddonUpdateAvailable}" IsEnabled="{Binding !AddonUpdateBusy}" />
+              <Button Content="Releases" Command="{Binding OpenCommand}"
+                      CommandParameter="https://github.com/4FingerStudios/FrostyBlender/releases/latest" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
 
         <Border Classes="card">
           <StackPanel Spacing="14">

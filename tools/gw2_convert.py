@@ -56,6 +56,12 @@ def mesh_sections(archive, resource, skinned=False):
     with skinned=True they come back in their bind pose with a 'skin' of skeleton bone indices
     and weights: a section's byte at +43 counts its bone palette, a u16 list at the offset in +44."""
     data = archive.data(resource)
+    if len(data) >= 40 and not 0 < struct.unpack_from('<Q', data, 32)[0] < len(data):
+        lod = struct.unpack_from('>I', data, 32)[0]
+        if 0 < lod and lod + 4 <= len(data) and struct.unpack_from('>I', data, lod)[0] == 1 and not skinned:
+            raise SkinnedMeshUnsupported('Xenon skinned mesh requires animation support')
+        from gw1_xenon import mesh_sections as xenon_sections
+        return xenon_sections(archive, resource, skinned)
     if len(data) < 128:
         raise ValueError('Truncated GW2 MeshSet')
     lod = struct.unpack_from('<Q', data, 32)[0]
@@ -424,7 +430,8 @@ class Gw2Converter(Converter):
                     resource = self.archive.resources[havok[1]['Resource']['$resource']]
                     if gw1:
                         # Garden Warfare 1 instances are addressed by physics part index, not order.
-                        poses = gw1_part_poses(self.archive.data(resource), resource['metadata'])
+                        poses = gw1_part_poses(self.archive.data(resource), resource['metadata'],
+                                               '>' if self.archive.inventory.get('platform') == 'xenon' else '<')
                     else:
                         poses, bodies = group_instances(self.archive.data(resource), resource['metadata'])
                         if len(poses) != physical:

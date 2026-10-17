@@ -23,6 +23,7 @@ public sealed class DiscordUser
 public sealed class AppSettings
 {
     public bool DiscordPresence { get; set; } = true;
+    public bool CheckUpdatesOnStartup { get; set; } = true;
     public DiscordUser? DiscordUser { get; set; }
 
     private static string File => Path.Combine(BlenderLink.Folder, "settings.json");

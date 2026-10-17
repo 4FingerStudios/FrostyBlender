@@ -37,22 +37,24 @@ def group_instances(data, metadata):
     return poses, bodies
 
 
-def gw1_part_poses(data, metadata):
+def gw1_part_poses(data, metadata, endian='<'):
     """Garden Warfare 1 (Havok 2012, packfile version 9): the 32-bit hkpStaticCompoundShape's
     64-byte instances hold an hkQsTransform (translation, quaternion, scale) and, at byte 60,
     the physics part index the group's members address through PhysicsPartRange."""
     if len(metadata) != 16:
         raise ValueError('Truncated GW1 grouped physics resource')
-    pack = struct.unpack('<4I', bytes(metadata))[0] & 0xffffff
-    if pack + 64 > len(data) or struct.unpack_from('<4I', data, pack) != (0x57e0e057, 0x10c0c010, 0, 9):
+    pack = struct.unpack(endian + '4I', bytes(metadata))[0] & 0xffffff
+    if pack + 64 > len(data) or struct.unpack_from(endian + '4I', data, pack) != (0x57e0e057, 0x10c0c010, 0, 9):
         raise ValueError('Unsupported GW1 grouped Havok packfile')
-    floats = np.frombuffer(data[:len(data) // 4 * 4], '<f4')
+    floats = np.frombuffer(data[:len(data) // 4 * 4], endian + 'f4')
 
     def valid(at):
         with np.errstate(over='ignore', invalid='ignore'):
             return _valid(at)
 
     def _valid(at):
+        if endian == '>' and struct.unpack_from('>I', data, at + 60)[0] >> 24 == 0:
+            return False  # Compound instances, not the nested shapes' identity transforms.
         t, q, s = floats[at // 4:at // 4 + 3], floats[at // 4 + 4:at // 4 + 8], floats[at // 4 + 8:at // 4 + 11]
         return (np.isfinite(floats[at // 4:at // 4 + 11]).all() and abs(float(q @ q) - 1) < 1e-3
                 and np.all(abs(s) > 1e-6) and np.all(abs(t) < 1e6))
@@ -79,5 +81,6 @@ def gw1_part_poses(data, metadata):
         pose = np.eye(4)
         pose[:3, :3] = rotation * floats[at // 4 + 8:at // 4 + 11].astype(np.float64)[None, :]
         pose[:3, 3] = floats[at // 4:at // 4 + 3]
-        poses[struct.unpack_from('<H', data, at + 60)[0]] = pose
+        part = (struct.unpack_from('>I', data, at + 60)[0] & 0xffffff) if endian == '>' else struct.unpack_from('<H', data, at + 60)[0]
+        poses[part] = pose
     return poses

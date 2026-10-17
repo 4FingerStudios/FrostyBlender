@@ -46,6 +46,12 @@ BFN's files are encrypted. Paste your BFN initfs key into **BFN key** in the add
 
 ## Use it
 
+GW1 Xenon build support: the importer also reads the build with `Xenon/` bundle names and big-endian assets, including builds whose files are stored under `Data/Win32`. Set **Garden Warfare 1** in the add-on preferences to the folder holding `PVZ.Main_Win64_Retail.exe` (for example `D:\GW1`). Use the normal GW1 tabs. Maps, static props, skinned characters and NPCs, textures, effects and animation banks use the same import workflow. A build missing the usual Mainstreet animation bank automatically uses an available map's bank.
+
+Xenon texture exports untile and byte-swap the highest-resolution 2D mip before decoding; the selected texture-size limit still applies. Capture-point statues and pedestal pieces are available through Props. Grave Digger uses the Browncoat character skeleton, and Disco Zombie uses its dedicated skeleton from the Browncoat folder. Cubemaps, volume textures, native lighting and full terrain splat shaders remain outside the existing material approximation.
+
+Run synthetic PC/Xenon format regression checks with `python -m unittest discover -s tests -p test_gw1_xenon.py -v`. Fixtures are generated in memory and contain no game assets.
+
 Everything lives in the 3D Viewport sidebar (press **N**). Pick the game with the **GW1 / GW2 / BFN** buttons, then click the scan button. The first scan of a game can take up to a minute; after that it's quick.
 
 | Tab | What it does |
@@ -76,6 +82,18 @@ Maps and props show each map's loading screen, so you can see what you're portin
 Browsing works even when Blender is closed. Imports run in Blender exactly as if you'd pressed Import in the add-on's tab. The add-on only listens on this PC (`127.0.0.1`, port 24567), and you can turn the link off in its preferences under **Link to the FrostyBlender app**.
 
 **Discord (optional, in Settings):** with the Discord app running, your profile shows *Playing FrostyBlender* with what you're browsing or porting; untick it to hide it. You can also **Log in with Discord** to show your name and avatar in the app. It only asks for your username and avatar, never sees your password, and keeps no login token.
+
+The desktop app checks the latest stable GitHub release on startup. When a newer app is available, click **Update and restart** in the sidebar or **Settings → App updates**. It verifies the download size and GitHub's SHA-256 digest (when supplied), closes the app, replaces its portable executable, and restarts. Keep the executable in a writable folder and finish imports before updating. You can disable startup checks or check manually in Settings. Failed installations try to restore the previous executable and write `%LOCALAPPDATA%\FrostyBlender\update.log`.
+
+**Blender add-on updates:** click **Update Blender add-on** in the sidebar or **Settings → Blender add-on updates → Update add-on**. The app downloads and verifies the latest stable release ZIP, then Blender checks its manifest, version and compatibility before replacing the installed files. Installation waits for the main thread and refuses to proceed during imports; failed replacements restore the previous files. Blender stays open with your scene and preferences intact. **Save your work and restart Blender** after installation to load the new code. App imports are paused until that restart. The installed add-on folder must be writable.
+
+This requires add-on **1.10.2 or newer**. Existing users must install the first supporting add-on ZIP manually once and restart Blender. Later add-on releases can use the automatic installer. The startup-check preference controls both app and add-on checks; each also has a manual check button.
+
+For maintainers: increment `<Version>` in `app/FrostyBlender/FrostyBlender.csproj` for each desktop app release and upload the built `FrostyBlender-<version>-windows-x64.exe` asset. The updater compares this filename's version, since GitHub release tags follow the independent add-on version. Automatic replacement is available in published single-file Windows builds.
+
+Run updater checks with `dotnet run --project tests/UpdaterChecks -c Release`. These exercise release selection, failed downloads, checksums, and Windows executable replacement and recovery in a temporary folder. Add `-- --live` to also download and verify the current GitHub release without installing it.
+
+Run add-on archive, rollback and local bridge checks with `python -m unittest discover -s tests -p test_addon_update.py -v` (Python 3.11+). These use temporary installations and a simulated Blender context, without changing an installed Blender add-on.
 
 ## Troubleshooting
 
