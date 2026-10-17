@@ -1,3 +1,5 @@
+# LOOKING FOR HELP IF YOU WANT TO HELP PLEASE REACH OUT ON DISCORD @ "4fs.sillydev"
+
 # FrostyBlender
 
 Bring maps, characters, customizations, NPCs, props and animations from **Plants vs. Zombies: Garden Warfare**, **Garden Warfare 2** and **Battle for Neighborville** into Blender. FrostyBlender is two parts that work together: a Blender add-on (the Frostbite Map Importer) that does the importing, and a desktop app for browsing everything and sending it to Blender in one click.
