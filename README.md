@@ -9,6 +9,7 @@ Bring maps, characters, customizations, NPCs, props and animations from **Plants
 - App assistance by **Spooky4576**
 - Code base by **Brando/Physics**
 - Effects idea by **V0e**
+- Shader idea by **GalaxyMan2015**, **Window** and **Brawltendo**
 - Special thanks to **Window**
 - Thank you to our testers: **\_Crow**
 

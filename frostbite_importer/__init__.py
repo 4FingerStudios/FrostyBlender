@@ -18,7 +18,8 @@ BRIDGE = Path(__file__).with_name('bridge.py')
 BUNDLED_TOOLS = Path(__file__).with_name('tools')
 BUNDLED_READER = Path(__file__).parent / 'bin' / 'aura_frostbite_reader.exe'
 BUNDLED_TYPES = Path(__file__).parent / 'data' / 'bfn_types.json'
-CREDITS = ('4FingerStudios', 'Made By Brando', 'Plugin made By SillyDev', 'Effects idea by V0e')
+CREDITS = ('4FingerStudios', 'Made By Brando', 'Plugin made By SillyDev', 'Effects idea by V0e',
+           'Shader idea by GalaxyMan2015, Window and Brawltendo')
 _job = {}  # the one running background process
 # Game executables, by the preference holding that game's folder.
 GAMES = {'gw1_path': 'PVZ.Main_Win64_Retail.exe', 'gw2_path': 'GW2.Main_Win64_Retail.exe',

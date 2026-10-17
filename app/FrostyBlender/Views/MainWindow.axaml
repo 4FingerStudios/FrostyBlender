@@ -346,6 +346,7 @@
                 <TextBlock><Run Text="Plugin by " Foreground="{StaticResource Muted}" /><Run Text="Zander/SillyDev" FontWeight="SemiBold" /></TextBlock>
                 <TextBlock><Run Text="Code base by " Foreground="{StaticResource Muted}" /><Run Text="Brando/Physics" FontWeight="SemiBold" /></TextBlock>
                 <TextBlock><Run Text="Effects idea by " Foreground="{StaticResource Muted}" /><Run Text="V0e" FontWeight="SemiBold" /></TextBlock>
+                <TextBlock TextWrapping="Wrap"><Run Text="Shader idea by " Foreground="{StaticResource Muted}" /><Run Text="GalaxyMan2015, Window and Brawltendo" FontWeight="SemiBold" /></TextBlock>
               </StackPanel>
               <TextBlock Classes="muted" FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap"
                          Text="Fan-made tool, not affiliated with or endorsed by Electronic Arts or PopCap. GPL-3.0-or-later." />
