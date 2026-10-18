@@ -139,6 +139,104 @@ def _prop(armature, name, value, description):
     ui.update(min=0.0, max=1.0, soft_min=0.0, soft_max=1.0, description=description)
 
 
+COLOURS = {'left': 'THEME04', 'right': 'THEME01', 'center': 'THEME09'}
+
+
+def _create_controls(eb, names, master):
+    """Edit mode: a CTRL_ copy of each game bone, parented like the game bone (to CTRL_Master at the top)."""
+    for name in names:
+        src = eb[name]
+        ctrl = eb.new(PREFIX + name)
+        ctrl.head, ctrl.tail, ctrl.roll = src.head.copy(), src.tail.copy(), src.roll
+        ctrl.use_deform = False
+    for name in names:
+        src, ctrl = eb[name], eb[PREFIX + name]
+        parent = eb.get(PREFIX + src.parent.name) if src.parent else None
+        ctrl.parent = parent or master
+        ctrl.use_connect = False
+
+
+def _collections(data):
+    def collection(name, visible=True, parent=None):
+        col = data.collections_all.get(name) or data.collections.new(name, parent=parent)  # nested ones too
+        col.is_visible = visible
+        return col
+    controls = collection('Controls')
+    groups = {g: collection(g, parent=controls) for g in ('Body', 'Arms', 'Legs', 'Face', 'IK')}
+    return groups, collection('Helpers', False), collection('Game skeleton', False)
+
+
+def _setup_controls(armature, names, height, shapes):
+    """Pose mode: shape, colour and group for each new control, and the game bone following it."""
+    data = armature.data
+    groups, helpers, game = _collections(data)
+    for name in names:
+        game.assign(data.bones[name])
+        ctrl = data.bones[PREFIX + name]
+        ctrl['frostbite_control'] = 1
+        pb = armature.pose.bones[PREFIX + name]
+        pb.rotation_mode = 'QUATERNION'
+        low = name.lower()
+        if HELPER.search(name) or name in ('Reference',):
+            helpers.assign(ctrl)
+        elif FACE.search(name):
+            groups['Face'].assign(ctrl)
+        elif re.search(r'arm|hand|finger|pod|clav|shoulder|thumb', low):
+            groups['Arms'].assign(ctrl)
+        elif re.search(r'leg|foot|toe|thigh|calf|knee|root', low):
+            groups['Legs'].assign(ctrl)
+        else:
+            groups['Body'].assign(ctrl)
+        length = max(data.bones[name].length, height * 0.02)
+        pb.custom_shape = shapes['ring']
+        pb.use_custom_shape_bone_size = False
+        # Ring sizes: small on the face and along chains, bigger for the body's main bones.
+        if FACE.search(name):
+            scale = height * 0.02
+        elif low in ('hips', 'pelvis', 'cog', 'root'):
+            scale = height * 0.16
+        elif low in ('head', 'neck', 'chest'):
+            scale = height * 0.1
+        else:
+            scale = min(max(length * 0.45, height * 0.025), height * 0.07)
+        pb.custom_shape_scale_xyz = (scale, length, scale)
+        pb.color.palette = COLOURS[_side(name)]
+        ctrl.color.palette = COLOURS[_side(name)]
+        constraint = armature.pose.bones[name].constraints.new('COPY_TRANSFORMS')
+        constraint.name = 'Frostbite control'
+        constraint.target, constraint.subtarget = armature, PREFIX + name
+        _driver(constraint, 'influence', armature, CONTROL_PROP)
+
+
+def extend(context, armature):
+    """Controls for game bones added after the rig was built (a hat, prop or weapon imported onto the character
+    brings its own bones). Returns how many were added."""
+    have = {b.name for b in armature.data.bones}
+    missing = [b.name for b in game_bones(armature) if PREFIX + b.name not in have]
+    if not missing:
+        return 0
+    order = []
+    def visit(name):
+        bone = armature.data.bones[name]
+        if bone.parent and bone.parent.name in missing and bone.parent.name not in order:
+            visit(bone.parent.name)
+        if name not in order:
+            order.append(name)
+    for name in missing:
+        visit(name)
+    height = armature.get('frostbite_rig_height') or max((b.head_local.z for b in game_bones(armature)), default=1.0) or 1.0
+    shapes = widgets()
+    mode = armature.mode
+    context.view_layer.objects.active = armature
+    bpy.ops.object.mode_set(mode='EDIT')
+    eb = armature.data.edit_bones
+    _create_controls(eb, order, eb.get('CTRL_Master'))
+    bpy.ops.object.mode_set(mode='POSE')
+    _setup_controls(armature, order, height, shapes)
+    bpy.ops.object.mode_set(mode='OBJECT' if mode not in ('POSE',) else 'POSE')
+    return len(order)
+
+
 # ---------------------------------------------------------------- build
 def build(context, armature):
     """Add the control rig to `armature` (once). Returns a short report."""
@@ -160,15 +258,7 @@ def build(context, armature):
     eb = armature.data.edit_bones
     master = eb.new('CTRL_Master')
     master.head, master.tail, master.roll = Vector((0, 0, 0)), Vector((0, height * 0.25, 0)), 0
-    for name in names:
-        src = eb[name]
-        ctrl = eb.new(PREFIX + name)
-        ctrl.head, ctrl.tail, ctrl.roll = src.head.copy(), src.tail.copy(), src.roll
-        ctrl.use_deform = False
-    for name in names:
-        src, ctrl = eb[name], eb[PREFIX + name]
-        ctrl.parent = eb[PREFIX + src.parent.name] if src.parent else master
-        ctrl.use_connect = False
+    _create_controls(eb, names, master)
     for base, chain in ik.items():
         last = eb[chain[-1]]
         target = eb.new(IK_PREFIX + base)
@@ -204,52 +294,11 @@ def build(context, armature):
     bpy.ops.object.mode_set(mode='POSE')
 
     data = armature.data
-    def collection(name, visible=True, parent=None):
-        col = data.collections.get(name) or data.collections.new(name, parent=parent)
-        col.is_visible = visible
-        return col
-    controls = collection('Controls')
-    groups = {g: collection(g, parent=controls) for g in ('Body', 'Arms', 'Legs', 'Face', 'IK')}
-    helpers = collection('Helpers', False)
-    game = collection('Game skeleton', False)
-    colours = {'left': 'THEME04', 'right': 'THEME01', 'center': 'THEME09'}
+    groups, helpers, game = _collections(data)
+    colours = COLOURS
     _prop(armature, CONTROL_PROP, 1.0, 'Off (0): game animation plays as imported. On (1): the controls drive the body')
-    for name in names:
-        game.assign(data.bones[name])
-        ctrl = data.bones[PREFIX + name]
-        ctrl['frostbite_control'] = 1
-        pb = armature.pose.bones[PREFIX + name]
-        pb.rotation_mode = 'QUATERNION'
-        low = name.lower()
-        if HELPER.search(name) or name in ('Reference',):
-            helpers.assign(ctrl)
-        elif FACE.search(name):
-            groups['Face'].assign(ctrl)
-        elif re.search(r'arm|hand|finger|pod|clav|shoulder|thumb', low):
-            groups['Arms'].assign(ctrl)
-        elif re.search(r'leg|foot|toe|thigh|calf|knee|root', low):
-            groups['Legs'].assign(ctrl)
-        else:
-            groups['Body'].assign(ctrl)
-        length = max(data.bones[name].length, height * 0.02)
-        pb.custom_shape = shapes['ring']
-        pb.use_custom_shape_bone_size = False
-        # Ring sizes: small on the face and along chains, bigger for the body's main bones.
-        if FACE.search(name):
-            scale = height * 0.02
-        elif name.lower() in ('hips', 'pelvis', 'cog', 'root'):
-            scale = height * 0.16
-        elif name.lower() in ('head', 'neck', 'chest'):
-            scale = height * 0.1
-        else:
-            scale = min(max(length * 0.45, height * 0.025), height * 0.07)
-        pb.custom_shape_scale_xyz = (scale, length, scale)
-        pb.color.palette = colours[_side(name)]
-        ctrl.color.palette = colours[_side(name)]
-        constraint = armature.pose.bones[name].constraints.new('COPY_TRANSFORMS')
-        constraint.name = 'Frostbite control'
-        constraint.target, constraint.subtarget = armature, PREFIX + name
-        _driver(constraint, 'influence', armature, CONTROL_PROP)
+    armature['frostbite_rig_height'] = height
+    _setup_controls(armature, names, height, shapes)
     master_pb = armature.pose.bones['CTRL_Master']
     master_pb.custom_shape = shapes['root']
     master_pb.use_custom_shape_bone_size = False
@@ -267,7 +316,7 @@ def build(context, armature):
         target.custom_shape = shapes['cube']
         target.use_custom_shape_bone_size = False
         target.custom_shape_scale_xyz = (height * 0.04,) * 3
-        target.color.palette = colours[_side(base)]
+        target.color.palette = COLOURS[_side(base)]
         target.rotation_mode = 'QUATERNION'
         constraint = armature.pose.bones[PREFIX + chain[-1]].constraints.new('IK')
         constraint.name = 'Frostbite IK'
@@ -291,7 +340,7 @@ def build(context, armature):
             pb.custom_shape = shapes['sphere']
             pb.use_custom_shape_bone_size = False
             pb.custom_shape_scale_xyz = (height * (0.05 if bone_name == 'CTRL_EyeTarget' else 0.025),) * 3
-            pb.color.palette = 'THEME09' if bone_name == 'CTRL_EyeTarget' else colours[_side(bone_name[5:])]
+            pb.color.palette = 'THEME09' if bone_name == 'CTRL_EyeTarget' else COLOURS[_side(bone_name[5:])]
         for n in eyes:
             track = armature.pose.bones[PREFIX + n].constraints.new('DAMPED_TRACK')
             track.name = 'Frostbite eye aim'
@@ -419,8 +468,9 @@ def _armature(context):
 class FROSTBITE_OT_make_control_rig(bpy.types.Operator):
     bl_idname = 'frostbite.make_control_rig'
     bl_label = 'Make control rig'
-    bl_description = ('Add animator controls (FK, IK, eye aim) on top of the selected character. The game bones are '
-                      'kept as they are, so game animations still import onto it')
+    bl_description = ('Add animator controls (FK, IK, eye aim) on top of the selected character, or controls for '
+                      'bones added since (hats, props). The game bones are kept as they are, so game animations '
+                      'still import onto it')
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -433,7 +483,11 @@ class FROSTBITE_OT_make_control_rig(bpy.types.Operator):
             bpy.ops.object.mode_set(mode='OBJECT')
         context.view_layer.objects.active = armature
         try:
-            report = build(context, armature)
+            if armature.get('frostbite_control_rig'):
+                added = extend(context, armature)
+                report = ('%d new controls for added bones' % added) if added else 'every bone already has a control'
+            else:
+                report = build(context, armature)
         except (ValueError, RuntimeError) as error:
             self.report({'ERROR'}, str(error))
             return {'CANCELLED'}
@@ -490,6 +544,10 @@ def draw(layout, context):
     if not ob.get('frostbite_control_rig'):
         box.operator('frostbite.make_control_rig', icon='BONE_DATA')
         return
+    have = {b.name for b in ob.data.bones}
+    missing = sum(1 for b in game_bones(ob) if PREFIX + b.name not in have)
+    if missing:
+        box.operator('frostbite.make_control_rig', text='Add controls for %d new bones' % missing, icon='BONE_DATA')
     box.prop(ob, '["%s"]' % CONTROL_PROP, text='Controls (0 = game animation)', slider=True)
     for key in sorted(k for k in ob.keys() if k.startswith('ik_')):
         box.prop(ob, '["%s"]' % key, text='IK ' + key[3:].replace('_', ' ').title(), slider=True)

@@ -189,9 +189,18 @@ def _poll():
             if cursor:
                 _spawn(root, before, cursor)
         pro_note = ''
-        if pro and importer.armatures:
+        if importer.armatures:
             from . import rig_tools
             for armature, _ in importer.armatures.values():
+                if armature.get('frostbite_control_rig'):  # pieces added to a character that has the pro rig
+                    try:
+                        added = rig_tools.extend(bpy.context, armature)
+                        pro_note = ', %d new controls' % added if added else ''
+                    except Exception as error:
+                        pro_note = ', controls for the new bones failed: %s' % error
+                    continue
+                if not pro:
+                    continue
                 if not armature.get('frostbite_control_rig'):
                     try:
                         rig_tools.build(bpy.context, armature)
