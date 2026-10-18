@@ -311,22 +311,28 @@ def controls_from_animation(armature):
     action = armature.animation_data.action if armature.animation_data else None
     if action is None:
         raise ValueError('Import a game clip onto this armature first')
-    copied = 0
-    for fc in list(_fcurves(action)):
+    # Read everything first as plain data: adding F-curves can move Blender's storage and leave references to
+    # the old ones dangling (a crash on bigger characters).
+    sources = []
+    for fc in _fcurves(action):
         m = re.match(r'pose\.bones\["(.+?)"\]\.(.+)$', fc.data_path)
         if not m or m.group(1).startswith((PREFIX, IK_PREFIX)) or PREFIX + m.group(1) not in armature.pose.bones:
             continue
-        path = 'pose.bones["%s%s"].%s' % (PREFIX, m.group(1), m.group(2))
-        old = _find(action, path, fc.array_index)
-        if old is not None:
-            _remove(action, old)
-        new = _new_fcurve(action, path, fc.array_index, PREFIX + m.group(1))
-        new.keyframe_points.add(len(fc.keyframe_points))
-        for a, b in zip(fc.keyframe_points, new.keyframe_points):
-            b.co, b.interpolation = a.co.copy(), a.interpolation
-            b.handle_left, b.handle_right = a.handle_left.copy(), a.handle_right.copy()
+        keys = [(tuple(k.co), k.interpolation, tuple(k.handle_left), tuple(k.handle_right)) for k in fc.keyframe_points]
+        sources.append((m.group(1), m.group(2), fc.array_index, keys))
+    targets = {('pose.bones["%s%s"].%s' % (PREFIX, bone, prop), index) for bone, prop, index, _ in sources}
+    while True:  # drop earlier copies, looking each one up afresh
+        old = next(((f.data_path, f.array_index) for f in _fcurves(action) if (f.data_path, f.array_index) in targets), None)
+        if old is None:
+            break
+        _remove(action, _find(action, *old))
+    for bone, prop, index, keys in sources:
+        new = _new_fcurve(action, 'pose.bones["%s%s"].%s' % (PREFIX, bone, prop), index, PREFIX + bone)
+        new.keyframe_points.add(len(keys))
+        for point, (co, interpolation, left, right) in zip(new.keyframe_points, keys):
+            point.co, point.interpolation, point.handle_left, point.handle_right = co, interpolation, left, right
         new.update()
-        copied += 1
+    copied = len(sources)
     for key in list(armature.keys()):
         if key.startswith('ik_'):
             armature[key] = 0.0

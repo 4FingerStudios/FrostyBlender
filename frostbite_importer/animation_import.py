@@ -38,8 +38,6 @@ def apply_clip(context, armature, clip, set_fps=True):
     # Only the game skeleton: a control rig's bones (CTRL_, IK_) are animated through the rig, not by clips.
     bones = _order([b for b in armature.data.bones
                     if not (b.name.startswith(('CTRL_', 'IK_')) or b.get('frostbite_control'))])
-    if 'rig_controls' in armature.keys():
-        armature['rig_controls'] = 0.0  # play the clip as imported; the rig's panel turns the controls back on
     by_lower = {b.name.lower(): b.name for b in bones}
     rest = {b.name: b.matrix_local.copy() for b in bones}
     # Rest pose in Frostbite space, and each bone's rest transform relative to its parent.
@@ -97,6 +95,11 @@ def apply_clip(context, armature, clip, set_fps=True):
     scene.frame_start, scene.frame_end = 1, max(1, len(frames))
     action['frostbite_clip'] = clip.get('name', '')
     action['frostbite_fps'] = fps
+    if armature.get('frostbite_control_rig'):
+        # A pro-rigged character: the clip goes onto the controls too, so they move with it and drive the body
+        # (identical result), ready to adjust. The game bones keep their keys for Bake to game skeleton.
+        from . import rig_tools
+        rig_tools.controls_from_animation(armature)
     return action, len(matched)
 
 
