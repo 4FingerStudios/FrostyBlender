@@ -554,7 +554,7 @@ classes = (FrostbitePreferences, FrostbiteMap, FrostbiteState, FROSTBITE_OT_buil
 
 
 # The Customizations tab uses the helpers above, so it is imported after them.
-from . import animation_import, animations_ui, app_link, cosmetics_ui, effects_ui, npcs_ui, props_ui  # noqa: E402
+from . import animation_import, animations_ui, app_link, cosmetics_ui, effects_ui, npcs_ui, props_ui, rig_tools  # noqa: E402
 
 
 def _apply_link(restart=False):
@@ -579,6 +579,7 @@ def register():
     npcs_ui.register()
     props_ui.register()
     effects_ui.register()
+    rig_tools.register()
     animations_ui.register()
     bpy.app.timers.register(_apply_link, first_interval=1.0)
 
@@ -586,6 +587,7 @@ def register():
 def unregister():
     app_link.stop()
     animations_ui.unregister()
+    rig_tools.unregister()
     effects_ui.unregister()
     props_ui.unregister()
     npcs_ui.unregister()

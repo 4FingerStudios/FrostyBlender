@@ -35,7 +35,11 @@ def _order(bones):
 
 def apply_clip(context, armature, clip, set_fps=True):
     """Create an Action on `armature` from a decoded clip dict; returns (action, matched bone count)."""
-    bones = _order(armature.data.bones)
+    # Only the game skeleton: a control rig's bones (CTRL_, IK_) are animated through the rig, not by clips.
+    bones = _order([b for b in armature.data.bones
+                    if not (b.name.startswith(('CTRL_', 'IK_')) or b.get('frostbite_control'))])
+    if 'rig_controls' in armature.keys():
+        armature['rig_controls'] = 0.0  # play the clip as imported; the rig's panel turns the controls back on
     by_lower = {b.name.lower(): b.name for b in bones}
     rest = {b.name: b.matrix_local.copy() for b in bones}
     # Rest pose in Frostbite space, and each bone's rest transform relative to its parent.
@@ -54,8 +58,8 @@ def apply_clip(context, armature, clip, set_fps=True):
     action = bpy.data.actions.new(clip.get('name') or 'Frostbite clip')
     armature.animation_data_create()
     armature.animation_data.action = action
-    for pb in armature.pose.bones:
-        pb.rotation_mode = 'QUATERNION'
+    for b in bones:
+        armature.pose.bones[b.name].rotation_mode = 'QUATERNION'
     scene = context.scene
     fps = float(clip.get('fps') or 30.0)
     if set_fps:

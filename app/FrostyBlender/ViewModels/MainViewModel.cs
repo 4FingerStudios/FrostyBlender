@@ -101,6 +101,7 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _textureSize = "1024";
     [ObservableProperty] private bool _rig = true;
     [ObservableProperty] private bool _gameShaders;
+    [ObservableProperty] private bool _proRig = true;
     [ObservableProperty] private bool _spawnAtCursor = true;
     [ObservableProperty] private bool _setFps = true;
     [ObservableProperty] private bool _hideAdditive = true;
@@ -556,7 +557,7 @@ public partial class MainViewModel : ObservableObject
             JobStatus = "Tick at least one item first.";
             return;
         }
-        var options = new JsonObject { ["texture_size"] = TextureSize, ["rig"] = Rig, ["spawn_at_cursor"] = SpawnAtCursor, ["set_fps"] = SetFps, ["game_shaders"] = GameShaders };
+        var options = new JsonObject { ["texture_size"] = TextureSize, ["rig"] = Rig, ["spawn_at_cursor"] = SpawnAtCursor, ["set_fps"] = SetFps, ["game_shaders"] = GameShaders, ["pro_rig"] = Rig && ProRig };
         if (Section == Section.Animations && Armature != ActiveArmature) options["armature"] = Armature;
         var kind = Section switch
         {

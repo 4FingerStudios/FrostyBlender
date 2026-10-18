@@ -84,6 +84,9 @@ class FrostbiteCosmeticsState(bpy.types.PropertyGroup):
     search: StringProperty(name='', description='Filter items by name', options={'TEXTEDIT_UPDATE'})
     rigged: BoolProperty(name='Rig to skeleton', default=True,
                          description="Bind the items to an armature of the character's skeleton, ready to pose")
+    pro_rig: BoolProperty(name='Pro rig (animator controls)', default=True,
+                          description='After import, add the control rig: FK/IK controls and eye aim on top of the game '
+                                      'skeleton. Game animations still import onto it')
     status: StringProperty()
 
 
@@ -151,7 +154,7 @@ def _poll():
             state.status = message
         _redraw()
         return 1.0
-    label, rig = _job['label'], _job.get('rig', True)
+    label, rig, pro = _job['label'], _job.get('rig', True), _job.get('pro', False)
     _job.clear()
     try:
         result = json.loads((job / 'result.json').read_text(encoding='utf-8'))
@@ -166,10 +169,21 @@ def _poll():
         root = importer.run(bpy.context)
         if root is not None:
             root.name = label
+        pro_note = ''
+        if pro and importer.armatures:
+            from . import rig_tools
+            for armature, _ in importer.armatures.values():
+                if not armature.get('frostbite_control_rig'):
+                    try:
+                        rig_tools.build(bpy.context, armature)
+                        pro_note = ', pro rig added'
+                    except Exception as error:  # the import itself is done; report the rig separately
+                        pro_note = ', pro rig failed: %s' % error
+                        print('Frostbite pro rig failed on %s: %s' % (armature.name, error))
         note = ' (%d converter errors)' % result['errors'] if result.get('errors') else ''
         if state:
             rigged = ', rigged to %s' % ', '.join(o.name for o, _ in importer.armatures.values()) if importer.armatures else ''
-            state.status = 'Done: %d meshes%s%s' % (len(importer.meshes), rigged, note)
+            state.status = 'Done: %d meshes%s%s%s' % (len(importer.meshes), rigged, pro_note, note)
     except Exception as error:
         if state:
             state.status = 'Failed: %s' % error
@@ -217,7 +231,7 @@ class FROSTBITE_OT_cosmetics_import(bpy.types.Operator):
             env = dict(os.environ, AURA_BFN_KEY=''.join(p.bfn_key.split()))
         _job.update(proc=subprocess.Popen(command, env=env, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)),
                     dir=job, start=time.time(), label='%s %s cosmetics' % (state.source, character.name),
-                    rig=state.rigged)
+                    rig=state.rigged, pro=state.rigged and state.pro_rig)
         state.status = 'Starting...'
         bpy.app.timers.register(_poll, first_interval=1.0)
         self.report({'INFO'}, 'Converting %d cosmetics into %s' % (len(items), job))
@@ -273,6 +287,10 @@ class FROSTBITE_PT_cosmetics(bpy.types.Panel):
         layout.prop(context.scene.frostbite, 'texture_size')
         layout.prop(context.scene.frostbite, 'game_shaders')
         layout.prop(state, 'rigged')
+        if state.rigged:
+            row = layout.row(align=True)
+            row.prop(state, 'pro_rig')
+            row.operator('frostbite.make_control_rig', text='Add to selected', icon='BONE_DATA')
         row = layout.row(align=True)
         row.scale_y = 1.4
         row.operator('frostbite.cosmetics_import', icon='IMPORT')

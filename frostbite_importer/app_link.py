@@ -236,6 +236,7 @@ def _run(request):
                 for item in state.items:
                     item.selected = True
                 state.rigged = bool(options.get('rig', True))
+                state.pro_rig = bool(options.get('pro_rig', False))
                 if kind == 'npcs':
                     state.spawn_at_cursor = bool(options.get('spawn_at_cursor', True))
                 return _press(bpy.ops.frostbite.cosmetics_import if kind == 'cosmetics' else bpy.ops.frostbite.npcs_import)

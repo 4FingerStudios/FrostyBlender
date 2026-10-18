@@ -285,6 +285,8 @@ class FROSTBITE_PT_animations(bpy.types.Panel):
             box = layout.box()
             for line in _wrap(state.status, 40):
                 box.label(text=line)
+        from . import rig_tools
+        rig_tools.draw(layout, context)
         draw_credits(layout)
 
 

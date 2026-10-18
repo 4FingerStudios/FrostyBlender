@@ -227,6 +227,9 @@
                 <CheckBox Content="Game shaders (GW1/GW2)" IsChecked="{Binding GameShaders}" IsVisible="{Binding !IsAnimations}"
                           ToolTip.Tip="Materials wired like the game's own shaders: ambient occlusion, smoothness, metalness, tint masks and emissive. Off: simpler default materials." />
                 <CheckBox Content="Rig to skeleton" IsChecked="{Binding Rig}" IsVisible="{Binding IsCharacterLike}" />
+                <CheckBox Content="Pro rig (animator controls)" IsChecked="{Binding ProRig}" IsVisible="{Binding IsCharacterLike}"
+                          IsEnabled="{Binding Rig}" Margin="22,0,0,0"
+                          ToolTip.Tip="Adds FK/IK controls, eye aim and bone groups on top of the game skeleton. Game animations still import onto it." />
                 <CheckBox Content="Spawn at the 3D cursor" IsChecked="{Binding SpawnAtCursor}" IsVisible="{Binding ShowCursorOption}" />
                 <StackPanel Spacing="8" IsVisible="{Binding IsAnimations}">
                   <TextBlock Text="Put the clips on" />
