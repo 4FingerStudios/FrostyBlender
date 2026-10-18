@@ -89,6 +89,9 @@ class Importer:
                 if referenced:
                     image = image.copy()
                 image.colorspace_settings.name = colorspace
+            # Frostbite packs shader data into alpha, even on opaque diffuse
+            # maps. Premultiplication discards RGB where that data channel is 0.
+            image.alpha_mode = 'CHANNEL_PACKED'
         else:
             self.warnings.append('Missing texture ' + rel)
         self.images[key] = image

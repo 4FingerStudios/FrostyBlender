@@ -45,6 +45,7 @@ def terrain_tree(data):
     if count != expected:
         raise ValueError(f'Terrain bounds node count mismatch: {count} != {expected} at {r.at}')
     samples = None
+    rasters = {}
     seen = set()
     while True:
         kind = r.number('B')
@@ -59,6 +60,7 @@ def terrain_tree(data):
         if size > LIMIT:
             raise ValueError('GW2 terrain raster exceeds limit')
         raster = r.take(size)
+        rasters[kind] = raster
         if kind == 1:
             if len(raster) < 8:
                 raise ValueError('Truncated GW2 terrain height raster')
@@ -94,7 +96,8 @@ def terrain_tree(data):
     root = tile_node((box[0], box[2], box[3], box[5]))
     if r.at != len(data):
         raise ValueError('GW2 terrain tile tree has trailing data')
-    return {'root': root, 'tiles': tiles, 'scale': scale, 'samples': samples, 'bounds': box, 'endian': endian}
+    return {'root': root, 'tiles': tiles, 'scale': scale, 'samples': samples, 'bounds': box,
+            'endian': endian, 'rasters': rasters}
 
 
 # A tile chunk concatenates the layers that tile stores: an optional height

@@ -56,6 +56,12 @@ Run synthetic PC/Xenon format regression checks with `python -m unittest discove
 
 Material imports select the diffuse image for Solid view's Texture display, keep color and data uses of the same image in separate color spaces, and apply tint once. Xenon mesh normals use signed 11/11/10 decoding. Reimport older exports from the game to regenerate their mesh normals. Blender material checks can be run with `blender --background --factory-startup --python-exit-code 1 --python tests/blender_material_checks.py`.
 
+GW1 character and prop materials now retain PSA, detail, quadrant and light-mask textures. Packed alpha is kept independent of RGB, preventing black opaque surfaces. Glass uses authored opacity and color; cutout shaders use texture alpha; Disco's light atlas animates with the timeline. PSA/SSO highlights, velvet grain and sheen are translated into Principled shading rather than running the original GPU shaders, so their appearance is an approximation. Use Material Preview or Rendered view to see transparency and emission.
+
+Animation imports preserve authored translations, including root motion and attachment movement. Run `blender --background --factory-startup --python-exit-code 1 --python tests/blender_animation_checks.py` for translation checks. Skeleton conversion also rejects invalid parent hierarchies, bind matrices and weights. Both Grave Digger bodies in the Xenon build share matching geometry and skin weights by section with the Browncoat costume and pass arm deformation/restoration checks.
+
+Terrain blending remains incomplete. Export now retains the separate anonymous shader databases (their resource IDs are all zero), including the level's authored terrain texture references. The terrain mask-to-layer mapping and procedural splat shaders still require decoding; terrain currently retains the documented substitute surface.
+
 Everything lives in the 3D Viewport sidebar (press **N**). Pick the game with the **GW1 / GW2 / BFN** buttons, then click the scan button. The first scan of a game can take up to a minute; after that it's quick.
 
 | Tab | What it does |

@@ -96,6 +96,21 @@ def finish(game, output, inventory):
     xenon = any(a.get('resource_type') == XENON_TEXTURE or a.get('bundle', '').lower().startswith('xenon/')
                 for a in inventory['assets'])
     inventory['platform'] = 'xenon' if xenon else 'win32'
+    if xenon:
+        # Cooked terrain shaders and character defaults live in anonymous shader
+        # databases, not the stripped ShaderGraph EBX. Keep each database by name.
+        existing = {a['name'] for a in inventory['assets'] if a.get('resource_type') == 0x36f3f2c0}
+        for source, offset, size, asset in gw2.cached_dependency_index(game)['resource'].values():
+            if asset.get('resource_type') != 0x36f3f2c0 or asset['name'] in existing:
+                continue
+            with source.open('rb') as stream:
+                stream.seek(offset)
+                content = gw2.decompress(gw2.Reader(stream.read(size)), asset['original_size'])
+            entry = dict(asset, path='resource/%s.bin' % asset['sha1'], bytes=len(content))
+            (output / entry['path']).parent.mkdir(parents=True, exist_ok=True)
+            (output / entry['path']).write_bytes(content)
+            inventory['assets'].append(entry)
+            existing.add(asset['name'])
     index = {}
     for base in (root / 'Win32' for root in gw2.data_roots(game)):
         for toc in sorted(base.glob('*chunks.toc')):

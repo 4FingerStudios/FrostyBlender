@@ -142,7 +142,7 @@ def build(mat, doc, image):
         t.link(t.math('SUBTRACT', 1.0, sm.outputs['Green']), bsdf.inputs['Roughness'])
         t.link(sm.outputs['Blue'], bsdf.inputs['Metallic'])
     elif kind == 'specular_masks' and sm:
-        scale = (vectors.get('Smoothness_Scale') or [1.0])[0] or 1.0
+        scale = (vectors.get('Smoothness_Scale') or [1.0])[0]
         t.link(t.math('SUBTRACT', 1.0, t.math('MULTIPLY', sm.outputs['Red'], scale)), bsdf.inputs['Roughness'])
         bsdf.inputs['Metallic'].default_value = 0.0
     else:

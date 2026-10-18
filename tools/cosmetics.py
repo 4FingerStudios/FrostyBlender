@@ -345,7 +345,7 @@ def gw_export(game, kind, items, output):
             continue
         for asset in assets:
             content = r.take(asset['original_size']) if decoded else gw2.decompress(r, asset['original_size'])
-            key = (asset['kind'], asset.get('resource_id', asset.get('guid', asset['name'])))
+            key = gw2.asset_key(asset)
             if key in seen:
                 continue
             seen.add(key)
@@ -434,6 +434,23 @@ class Rig:
             raise ValueError('SkeletonAsset has no bind pose')
         self.character, self.name = character, root.get('Name', character)
         self.bones = [{'name': n, 'parent': int(p), 'matrix': linear_transform(m)} for n, p, m in zip(names, parents, poses)]
+        # A skin fitting the bone count alone does not make a usable rig.
+        import numpy as np
+        for index, bone in enumerate(self.bones):
+            parent = bone['parent']
+            if parent < -1 or parent >= len(names) or parent == index:
+                raise ValueError('Invalid skeleton parent for ' + bone['name'])
+            chain = {index}
+            while parent != -1:
+                if parent in chain:
+                    raise ValueError('Skeleton hierarchy contains a cycle')
+                chain.add(parent)
+                parent = self.bones[parent]['parent']
+                if parent < -1 or parent >= len(names):
+                    raise ValueError('Invalid skeleton parent')
+            matrix = np.asarray(bone['matrix'])
+            if not np.isfinite(matrix).all() or abs(np.linalg.det(matrix[:3, :3])) < 1e-8:
+                raise ValueError('Invalid skeleton bind transform for ' + bone['name'])
         self.core = len(self.bones)
 
     def bind(self, skin_path, mesh, label):
@@ -446,6 +463,11 @@ class Rig:
         bones = np.frombuffer(raw, '<u2', count * width, 16).astype(np.int64)
         weights = np.frombuffer(raw, '<f4', count * width, 16 + count * width * 2)
         used = weights > 0
+        if not np.isfinite(weights).all() or (weights < 0).any():
+            raise ValueError('Skin contains invalid bone weights')
+        totals = weights.reshape(count, width).sum(axis=1)
+        if not np.allclose(totals[totals > 0], 1, atol=1e-4):
+            raise ValueError('Skin contains unnormalised vertices')
         procedural = bones >= 0x8000
         extra = (mesh.get('SkinnedProceduralAnimation') or {}).get('Bones') or []
         if (bones[used & procedural] - 0x8000 >= len(extra)).any():

@@ -206,20 +206,31 @@ class Gw2Converter(Converter):
                     paths[role] = path
                 else:
                     unresolved.append(role + ':' + guid)
+        # Keep every authored binding, including GW1's PSA, detail, animated
+        # light masks, quadrant textures and the second layer of blend shaders.
+        named_textures = {}
+        for name, guid in bindings.items():
+            path = self.texture(guid)
+            if path:
+                named_textures[name] = path
+        for role, name in (('psa', 'PSA'), ('detail', 'Detail_Map'), ('light_mask', 'Light_Mask')):
+            if name in named_textures:
+                paths[role] = named_textures[name]
         if unresolved:
             # A texture the game files do not hold must not cost the whole mesh: keep the rest.
             self.errors.append({'stage': 'material', 'name': mesh[1].get('Name', ''),
                                 'error': 'GW2 material textures unresolved: ' + ', '.join(unresolved)})
         vectors = {p.get('ParameterName', ''): [float(p.get('Value', {}).get(c, 0)) for c in 'xyzw']
                    for p in shader.get('VectorParameters', []) if p.get('ParameterName')}
-        content = {'textures': paths, 'texture_bindings': bindings, 'source_shader': shader,
+        content = {'textures': paths, 'named_textures': named_textures,
+                   'texture_bindings': bindings, 'source_shader': shader,
                    'shader_name': graph_name, 'alpha_cutoff': cutoff, 'tint': tint, 'vectors': vectors}
         digest = hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:20]
         if digest in self.materials:
             return self.materials[digest]
         rel = 'materials/frostbite/gw2_' + digest + '.json'
         content.update({'format': 'aura-frostbite-material', 'version': 1, 'name': mesh[1].get('Name', ''),
-                        'profile': 'gw2', 'double_sided': True,
+                        'profile': self.archive.inventory.get('profile', 'gw2'), 'double_sided': True,
                         'parameters': [tint, [.7, 0, 1, 0], [1, 1, 0, 0], [0, 0, 0, 0]]})
         path = self.assets / rel
         path.parent.mkdir(parents=True, exist_ok=True)

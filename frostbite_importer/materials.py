@@ -88,6 +88,10 @@ def surface_group():
 
 
 def build_material(mat, doc, image, game_shaders=False):
+    if doc.get('profile') == 'gw1' or doc.get('shader_name', '').lower().startswith('_pvz/shaders/'):
+        from .gw1_materials import build
+        build(mat, doc, image)
+        return
     if game_shaders:
         from .game_materials import build as build_game
         if build_game(mat, doc, image):

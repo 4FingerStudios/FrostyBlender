@@ -49,6 +49,23 @@ def ebx_fixture(endian):
 
 
 class FormatChecks(unittest.TestCase):
+    def test_anonymous_shader_databases_are_not_deduplicated_by_zero(self):
+        a = {'kind': 'resource', 'name': 'level_a/shaderdb', 'resource_id': '0', 'resource_type': 0x36f3f2c0}
+        b = dict(a, name='level_b/shaderdb')
+        self.assertNotEqual(gw2.asset_key(a), gw2.asset_key(b))
+        self.assertEqual(gw2.asset_key(a), gw2.asset_key(dict(a)))
+
+    def test_rig_rejects_cycles_and_bad_bind_transforms(self):
+        identity = {k: dict(zip('xyz', v)) for k, v in
+                    [('right', (1, 0, 0)), ('up', (0, 1, 0)), ('forward', (0, 0, 1)), ('trans', (0, 0, 0))]}
+        root = {'BoneNames': ['Root', 'Arm'], 'Hierarchy': [-1, 0], 'ModelPose': [identity, identity]}
+        self.assertEqual(cosmetics.Rig('fixture', {'objects': [root]}).core, 2)
+        for parents in ([1, 0], [-1, 3], [-2, 0]):
+            with self.assertRaises(ValueError):
+                cosmetics.Rig('fixture', {'objects': [dict(root, Hierarchy=parents)]})
+        with self.assertRaises(ValueError):
+            cosmetics.Rig('fixture', {'objects': [dict(root, ModelPose=[{}, identity])]})
+
     def test_disco_skeleton_in_shared_character_folder(self):
         names = ['characters/browncoatzombie/rigandmodel/browncoatzombie_skeleton',
                  'characters/browncoatzombie/rigandmodel/discozombie_skeleton']

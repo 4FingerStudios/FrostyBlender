@@ -71,11 +71,9 @@ def apply_clip(context, armature, clip, set_fps=True):
                 x, y, z, w = channels['r']
                 q = q_rest @ Quaternion((w, x, y, z)) if additive else Quaternion((w, x, y, z))
             if 't' in channels:
-                moved = t_rest + Vector(channels['t']) if additive else Vector(channels['t'])
-                # Bone lengths are fixed; a translation far from the rest offset belongs to an
-                # attachment point this skeleton places differently (e.g. GW1 Body_Prop), so keep rest.
-                if (moved - t_rest).length <= max(0.25, 0.5 * t_rest.length):
-                    t = moved
+                # Translation is an authored animation channel, including root motion
+                # and moving attachment bones. Magnitude is not a retargeting rule.
+                t = t_rest + Vector(channels['t']) if additive else Vector(channels['t'])
             if 's' in channels and not additive:
                 s = Vector(channels['s'])
             local = Matrix.Translation(t) @ q.to_matrix().to_4x4() @ Matrix.Diagonal(s.to_4d())

@@ -183,6 +183,17 @@ def bundle(data):
     return assets, r
 
 
+def asset_key(asset):
+    """Anonymous resources (notably per-bundle shader DBs) share ID zero."""
+    if asset['kind'] == 'resource':
+        identity = asset.get('resource_id')
+        if identity in (None, '', 0, '0'):
+            identity = (asset.get('resource_type'), asset['name'])
+    else:
+        identity = asset.get('guid', asset['name'])
+    return asset['kind'], identity
+
+
 def lz4(data, size):
     if fast_lz4 is not None:
         try:
@@ -441,6 +452,8 @@ def dependency_index(game):
                         key = guid_by_hash[sha]
                     else:
                         key = asset.get('resource_id', asset.get('guid'))
+                        if kind == 'resource' and key == '0':
+                            key = 'anonymous:%08x:%s' % (asset['resource_type'], asset['name'])
                     if not key:
                         continue
                     old = indexes[kind].get(key)
@@ -457,7 +470,7 @@ def cached_dependency_index(game):
     import os
     import pickle
     tocs = sorted((Path(game) / 'Data/Win32').rglob('*.toc'))
-    key = hashlib.sha256(repr(['endian-v2', str(Path(game).resolve())] + [(str(t), t.stat().st_size, t.stat().st_mtime_ns)
+    key = hashlib.sha256(repr(['endian-v3-anonymous', str(Path(game).resolve())] + [(str(t), t.stat().st_size, t.stat().st_mtime_ns)
                                                               for t in tocs]).encode()).hexdigest()[:24]
     folder = Path(os.environ.get('AURA_IMPORT_CACHE') or Path(os.environ.get('LOCALAPPDATA') or Path.home()) / 'aura-frostbite')
     path = folder / ('dependencies_%s.pickle' % key)
@@ -705,7 +718,7 @@ def export(game, package, output):
             assets, r = bundle(raw)
             for asset in assets:
                 content = r.take(asset['original_size']) if decoded else decompress(r, asset['original_size'])
-                key = (asset['kind'], asset.get('resource_id', asset.get('guid', asset['name'])))
+                key = asset_key(asset)
                 if key in seen:
                     continue
                 seen.add(key)
