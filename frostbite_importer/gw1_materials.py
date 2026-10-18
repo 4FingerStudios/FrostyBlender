@@ -74,10 +74,12 @@ def build(mat, doc, image):
         # Reading its painted colours as normal vectors corrupts surface lighting.
         normal_node = None
         normal = (.5, .5, 1, 1)
-    tint = doc.get('tint') or rgba('Tint_Color', rgba('Tint_Colour'))
-    if any('TintColour_Q%d' % i in vectors for i in range(1, 5)):
-        tint = quadrant([rgba('TintColour_Q%d' % i) for i in range(1, 5)])
-    color = t.mix(color, tint, 1, 'MULTIPLY')
+    # Older exports wrote a white `tint` even when Tint_Colour was authored.
+    # Prefer the source vectors, and accept both GW1 quadrant conventions.
+    tint = rgba('Tint_Color', rgba('Tint_Colour', rgba('ColorTint', doc.get('tint') or (1, 1, 1, 1))))
+    quadrant_names = [('Q%d_TintColour' % i, 'TintColour_Q%d' % i) for i in range(1, 5)]
+    if any(name in vectors for names in quadrant_names for name in names):
+        tint = quadrant([rgba(a, rgba(b)) for a, b in quadrant_names])
     detail_scale = scalar('Detail_UV_Tiling', 1)
     detail_uv = t.new('ShaderNodeVectorMath', -1300, operation='SCALE')
     t.link(tile.outputs[0], detail_uv.inputs[0])
@@ -99,18 +101,22 @@ def build(mat, doc, image):
                                           255 * scalar('Smoothness', 1)), 1)
         roughness = t.math('SQRT', t.math('DIVIDE', 2, t.math('ADD', exponent, 2)))
         specular, ao = channels.outputs['Green'], channels.outputs['Blue']
-    elif textures.get('specular_masks') or any('SpecularMasks' in key for key in named):
+    elif masks_node or textures.get('specular_masks') or any('SpecularMasks' in key for key in named):
         channels = t.new('ShaderNodeSeparateColor', -600)
         t.set(channels.inputs['Color'], masks)
         roughness = t.math('SUBTRACT', 1, t.math('MINIMUM', t.math('MULTIPLY',
                            channels.outputs['Red'], scalar('Smoothness_Scale', 1)), 1))
-        specular, ao = channels.outputs['Green'], channels.outputs['Blue']
+        # SSO/Specular_Masks blue is a tint mask, unlike PSA blue (AO).
+        specular, ao = channels.outputs['Green'], (1, 1, 1, 1)
     else:
         roughness = max(0, 1-min(1, scalar('Smoothness', .3)))
         specular, ao = 1, (1, 1, 1, 1)
     t.set(bsdf.inputs['Roughness'], roughness)
     t.set(bsdf.inputs['Specular IOR Level'], t.math('MULTIPLY', specular,
           scalar('Specular_Scale', scalar('Specular', .5))))
+    has_tint_mask = not psa and (masks_node or textures.get('specular_masks') or any('SpecularMasks' in key for key in named))
+    tint_mask = channels.outputs['Blue'] if has_tint_mask else 1
+    color = t.mix(color, t.mix(color, tint, 1, 'MULTIPLY'), tint_mask)
     t.set(bsdf.inputs['Base Color'], t.mix(color, ao, 1, 'MULTIPLY'))
 
     if normal_node or any(key.startswith('Q') and key.endswith('_Normal') for key in named):

@@ -173,15 +173,21 @@ class Gw2Converter(Converter):
         parameters = [(material[0], item) for item in shader.get('TextureParameters', [])] if material else []
         graph = self.archive.resolve(material[0], shader.get('Shader')) if material else None
         graph_name = graph[1].get('Name', '') if graph else ''
-        cutoff = .5 if 'alphatest' in graph_name.lower() else -1
-        tint = [1,1,1,1]
-        for parameter in shader.get('VectorParameters', []):
-            if parameter.get('ParameterName') == 'Tint_Color':
-                value = parameter.get('Value', {})
-                tint = [value.get(component,1) for component in ('x','y','z','w')]
+        shader_layers = [shader]
+        variation_shader = None
         selected = self.variations.get((mesh[0]['guid'], variation)) or self.variations.get((mesh[0]['guid'], 0))
         if selected and slot < len(selected[1].get('Materials', [])):
-            parameters += [(selected[0], item) for item in selected[1]['Materials'][slot].get('TextureParameters', [])]
+            selected_material = selected[1]['Materials'][slot]
+            override = self.archive.resolve(selected[0], selected_material.get('MaterialVariation'))
+            if override:
+                variation_shader = override[1].get('Shader', {})
+                shader_layers.append(variation_shader)
+                parameters += [(override[0], item) for item in variation_shader.get('TextureParameters', [])]
+                override_graph = self.archive.resolve(override[0], variation_shader.get('Shader'))
+                if override_graph:
+                    graph_name = override_graph[1].get('Name', graph_name)
+            parameters += [(selected[0], item) for item in selected_material.get('TextureParameters', [])]
+        cutoff = .5 if 'alphatest' in graph_name.lower() else -1
         bindings = {}
         unresolved = []
         for doc, parameter in parameters:
@@ -221,9 +227,12 @@ class Gw2Converter(Converter):
             self.errors.append({'stage': 'material', 'name': mesh[1].get('Name', ''),
                                 'error': 'GW2 material textures unresolved: ' + ', '.join(unresolved)})
         vectors = {p.get('ParameterName', ''): [float(p.get('Value', {}).get(c, 0)) for c in 'xyzw']
-                   for p in shader.get('VectorParameters', []) if p.get('ParameterName')}
+                   for layer in shader_layers for p in layer.get('VectorParameters', []) if p.get('ParameterName')}
+        tint = next((vectors[name] for name in ('Tint_Color', 'Tint_Colour', 'ColorTint')
+                     if name in vectors), [1, 1, 1, 1])
         content = {'textures': paths, 'named_textures': named_textures,
                    'texture_bindings': bindings, 'source_shader': shader,
+                   'source_shader_variation': variation_shader,
                    'shader_name': graph_name, 'alpha_cutoff': cutoff, 'tint': tint, 'vectors': vectors}
         digest = hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:20]
         if digest in self.materials:
@@ -492,6 +501,15 @@ class Gw2Converter(Converter):
                         visit(doc, {'$type':'StaticModelEntityData', 'Mesh':member['MeshAsset'],
                                     'Transform':identity}, transform @ matrix(obj['Transform']) @ local, source, stack, selected)
                         self.grouped_instances += 1
+            elif kind in ('WaterEntityData', 'WaterInteractEntityData') and obj.get('Visible', True):
+                from gw_water import convert_water
+                path, material = convert_water(self, doc, obj)
+                world = transform @ matrix(obj['Transform'])
+                places.append({'kind': 'frostbite_mesh', 'name': 'Water surface',
+                               'matrix': world.tolist(), 'values': {'collision': 0},
+                               'tags': {'mesh': path, 'material_0': material, 'surface': 'water',
+                                        'source': doc['guid'], 'source_level': source,
+                                        'level_instance': source, 'profile': self.archive.inventory.get('profile', 'gw2')}})
             elif kind == 'TerrainEntityData' and obj.get('Visible',True):
                 terrain = self.archive.resolve(doc,obj.get('TerrainAsset'))
                 if terrain is None:
@@ -586,6 +604,7 @@ class Gw2Converter(Converter):
                                   'Static environment and material texture bindings; shaders use Aura approximations.',
                                   'Collision is generated from render triangles, not native Havok physics.',
                                   'Terrain heightfields are translated; native terrain splat layers, holes and scatter vegetation are not yet translated.',
+                                  'Water exports a bounded plane and native shader sidecars; Blender approximates the surface without game wave simulation.',
                                   'Animated characters and original gameplay are not translated.']}
         return {'format': 'aura-frostbite-scene', 'version': 1, 'name': 'GW2_' + map_name, 'places': places}, report
 

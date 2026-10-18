@@ -88,6 +88,10 @@ def surface_group():
 
 
 def build_material(mat, doc, image, game_shaders=False):
+    if doc.get('surface') == 'water':
+        from .water_materials import build
+        build(mat, doc, image)
+        return
     if doc.get('profile') == 'gw1' or doc.get('shader_name', '').lower().startswith('_pvz/shaders/'):
         from .gw1_materials import build
         build(mat, doc, image)
