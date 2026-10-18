@@ -42,7 +42,7 @@ def _gw_level_meshes(game, package):
     """Mesh EBX names in a GW1/GW2 level's bundles, read from bundle headers only."""
     game = Path(game)
     out = {}
-    for root in (game / 'Data', game / 'Update/Patch/Data'):
+    for root in gw2.data_roots(game):
         toc = root / (package + '.toc')
         if not toc.is_file():
             continue

@@ -151,7 +151,7 @@ def _atlas_chunks(game, kind, output, inventory, index):
     xenon = inventory.get('platform') == 'xenon'
     toc = {}
     if kind == 'gw1':
-        for base in (game / 'Data/Win32', game / 'Update/Patch/Data/Win32'):
+        for base in (root / 'Win32' for root in gw2.data_roots(game)):
             for path in sorted(base.glob('*chunks.toc')):
                 for chunk in gw2.read_db(path).get('chunks', []):
                     toc[chunk['id']] = (path.with_suffix('.sb'), chunk)

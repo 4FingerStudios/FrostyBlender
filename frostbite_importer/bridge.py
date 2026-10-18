@@ -95,6 +95,23 @@ def effects_discover(args):
     write_json(args.out, dict(effects.discover(args.game), ok=True))
 
 
+def explorer(args):
+    """Game file explorer (see tools/explorer.py): list every file, look inside one, export a selection, or
+    find the mesh variation databases (texture tables) for meshes sent to Blender."""
+    sys.path.insert(0, str(args.tools))
+    import explorer as tool
+    if args.action == 'explorer-list':
+        result = tool.listing(args.game)
+    elif args.action == 'explorer-inspect':
+        result = tool.inspect(args.game, args.name, args.reader)
+    elif args.action == 'explorer-meshes':
+        result = {'variation_dbs': tool.mesh_tables(args.game, json.loads(args.items.read_text(encoding='utf-8')))}
+    else:
+        items = json.loads(args.items.read_text(encoding='utf-8'))
+        result = tool.export(args.game, items, args.reader, args.dest, args.texture_size)
+    write_json(args.out, dict(result, ok=True))
+
+
 def icons(args):
     """Game UI icons for characters, NPCs and cosmetics, as PNGs (see tools/icons.py)."""
     sys.path.insert(0, str(args.tools))
@@ -212,7 +229,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('action', choices=('discover', 'import', 'cosmetics-discover', 'cosmetics-import',
                                       'props-discover', 'props-import', 'animations-discover', 'animations-import',
-                                      'npcs-discover', 'npcs-import', 'icons', 'effects-discover', 'effects-import'))
+                                      'npcs-discover', 'npcs-import', 'icons', 'effects-discover', 'effects-import',
+                                      'explorer-list', 'explorer-inspect', 'explorer-export', 'explorer-meshes'))
     p.add_argument('--tools', type=Path, required=True)
     p.add_argument('--game', type=Path, required=True)
     p.add_argument('--out', type=Path)
@@ -225,12 +243,15 @@ def main():
     p.add_argument('--bfn-types', type=Path, help='Battle for Neighborville type name table (frosty_types.ps1)')
     p.add_argument('--items', type=Path, help='cosmetics-import: JSON list of items from cosmetics-discover')
     p.add_argument('--icons-dir', type=Path, help='icons: folder for the PNGs')
+    p.add_argument('--name', help='explorer-inspect: the file to look at')
+    p.add_argument('--dest', type=Path, help='explorer-export: the folder to save into')
     args = p.parse_args()
-    if args.action.endswith('discover') or args.action == 'icons':
+    if args.action.endswith('discover') or args.action == 'icons' or args.action.startswith('explorer-'):
         try:
             {'discover': discover, 'cosmetics-discover': cosmetics_discover, 'props-discover': props_discover,
              'animations-discover': animations_discover, 'npcs-discover': npcs_discover, 'icons': icons,
-             'effects-discover': effects_discover}[args.action](args)
+             'effects-discover': effects_discover, 'explorer-list': explorer, 'explorer-inspect': explorer,
+             'explorer-export': explorer, 'explorer-meshes': explorer}[args.action](args)
         except Exception as error:
             write_json(args.out, {'ok': False, 'error': str(error)})
             return 1

@@ -370,7 +370,7 @@ def _crop_picture(width, height, rgba):
     return keep, height, rows
 
 
-def decode(game, kind, names, reader, out):
+def decode(game, kind, names, reader, out, size=ICON_SIZE):
     """Write the PNG of each UI texture name not already in `out`; returns {name: png path}."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -383,7 +383,7 @@ def decode(game, kind, names, reader, out):
         export.mkdir()
         resource_of = _export_bfn(game, todo, export) if kind == 'bfn' else _export_gw(game, kind, todo, export)
         if resource_of:
-            env = dict(os.environ, AURA_IMPORT_TEXTURE_SIZE=str(ICON_SIZE))
+            env = dict(os.environ, AURA_IMPORT_TEXTURE_SIZE=str(size))
             subprocess.run([str(reader), '--textures', str(export), str(textures)], env=env, stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             try:

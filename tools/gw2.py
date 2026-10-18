@@ -112,7 +112,7 @@ def discover(game):
     if not (game / 'GW2.Main_Win64_Retail.exe').is_file():
         return []
     maps = {}
-    for data in (game / 'Data', game / 'Update/Patch/Data'):
+    for data in data_roots(game):
         levels = data / 'Win32/levels'
         if not levels.is_dir():
             continue
@@ -334,11 +334,46 @@ def patch_bundle(base, delta):
     return bytes(metadata + out)
 
 
+_PLATFORMS = {}
+
+
+def _platform(toc):
+    """'win32' or 'xenon' from a superbundle TOC's first bundle name (None for chunk-only TOCs)."""
+    toc = Path(toc)
+    if toc not in _PLATFORMS:
+        try:
+            bundles = (read_db(toc) or {}).get('bundles', []) if toc.is_file() else []
+        except Exception:
+            bundles = []
+        _PLATFORMS[toc] = bundles[0]['id'].split('/')[0].lower() if bundles else None
+    return _PLATFORMS[toc]
+
+
+def patch_applies(game, toc):
+    """False when the Update/Patch copy of a superbundle was made for another platform than its base, as in
+    hybrid GW1 builds whose Xenon superbundles (Coastal, Characters, UI) sit beside PC ones under a PC patch:
+    the patch names bundles 'win32/...' where the base has 'Xenon/...', and applying it would fail them.
+    Chunk-only TOCs always apply (chunks are found by GUID)."""
+    toc = Path(toc)
+    try:
+        relative = toc.relative_to(Path(game) / 'Data')
+    except ValueError:
+        relative = toc.relative_to(Path(game) / 'Update/Patch/Data')
+    base, patch = _platform(Path(game) / 'Data' / relative), _platform(Path(game) / 'Update/Patch/Data' / relative)
+    return not (base and patch and base != patch)
+
+
+def data_roots(game):
+    """The Data folders to read: the base and Update/Patch (check patch_applies per superbundle)."""
+    game = Path(game)
+    return [game / 'Data'] + ([game / 'Update/Patch/Data'] if (game / 'Update/Patch/Data').is_dir() else [])
+
+
 def bundles_with_patches(game, toc):
     base_description = read_db(toc)
     entries = {entry['id'].lower(): entry for entry in base_description.get('bundles', [])}
     patch_toc = Path(game) / 'Update/Patch/Data' / toc.relative_to(Path(game) / 'Data')
-    patched = read_db(patch_toc) if patch_toc.exists() else None
+    patched = read_db(patch_toc) if patch_toc.exists() and patch_applies(game, toc) else None
     descriptions = patched.get('bundles', []) if patched else list(entries.values())
     def read_entry(path, entry):
         if entry['offset'] < 0 or not 0 < entry['size'] <= LIMIT:
@@ -712,7 +747,7 @@ def export(game, package, output):
 def complete_texture_chunks(game, output, inventory, terrain_only=False):
     """Replace bundle low-mip data with full chunks from the base streaming SBs."""
     index = {}
-    for base in (Path(game) / 'Data/Win32', Path(game) / 'Update/Patch/Data/Win32'):
+    for base in (root / 'Win32' for root in data_roots(game)):
         for toc in sorted(base.glob('*chunks.toc')):
             for chunk in read_db(toc).get('chunks', []):
                 index[chunk['id']] = (toc.with_suffix('.sb'), chunk)

@@ -133,7 +133,7 @@ def main():
             app = build_app(work)
     with zipfile.ZipFile(target) as z:
         names = z.namelist()
-    for need in ('bin/aura_frostbite_reader.exe', 'tools/gw2.py', 'tools/npcs.py', 'tools/editor_bridge.py', 'tools/icons.py', 'tools/effects.py', 'tools/rig_models.json',
+    for need in ('bin/aura_frostbite_reader.exe', 'tools/gw2.py', 'tools/npcs.py', 'tools/editor_bridge.py', 'tools/icons.py', 'tools/effects.py', 'tools/explorer.py', 'tools/rig_models.json',
                  'app_link.py', 'addon_update.py', '__init__.py', 'LICENSE'):
         if need not in names:
             raise SystemExit('Release is missing ' + need)

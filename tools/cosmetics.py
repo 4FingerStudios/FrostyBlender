@@ -65,6 +65,7 @@ SKELETON_FALLBACKS = {'browncoat': ['browncoatzombie'], 'berzerkerzombie': ['bro
                       'peashooter_turret_ice': ['peashooter_turret_cannon'],
                       'peashooter_turret_repeater': ['peashooter_turret_gatling'],
                       'allstarimp': ['gargantuanimp'], 'yeti_imp': ['gargantuanimp'], 'yetiimp': ['simpleimp'],
+                      'pirate_imp': ['gargantuanimp', 'allstarimp'], 'mech_zombie_imp': ['gargantuanimp'],
                       'gigatorchwood': ['torchwood'], 'squash': ['spookysquash', 'gigasquash']}
 
 
@@ -147,7 +148,7 @@ def variation_index(game, kind):
     """Mesh GUID -> the MeshVariationDatabases that list it, cached per install. Meshes exported by name
     (abilities and other skeleton-only characters) get their textures from these, not from a bundle."""
     import hashlib
-    key = hashlib.sha256(('%s|%s|variations1' % (Path(game).resolve(), kind)).encode()).hexdigest()[:16]
+    key = hashlib.sha256(('%s|%s|variations2' % (Path(game).resolve(), kind)).encode()).hexdigest()[:16]
     base = Path(os.environ.get('AURA_IMPORT_CACHE') or Path(os.environ.get('LOCALAPPDATA') or Path.home()) / 'aura-frostbite')
     path = base / ('variations_%s_%s.json' % (kind, key))
     if path.is_file():
@@ -209,10 +210,12 @@ def bundle_names(game, kind):
         return [(entry[0], sb) for sb in archive.sbs if 'character' in sb.lower()
                 for entry in archive.toc(sb)['bundles'].values()]
     out = {}
-    for root in (game / 'Data', game / 'Update/Patch/Data'):
+    for root in gw2.data_roots(game):
         for toc in sorted((root / 'Win32').glob('*.toc')):
             if 'chunk' in toc.stem.lower():
                 continue
+            if root != game / 'Data' and not gw2.patch_applies(game, toc):
+                continue  # a PC patch over Xenon superbundles
             sb = toc.relative_to(root).with_suffix('').as_posix()
             for entry in gw2.read_db(toc).get('bundles', []):
                 out.setdefault(entry['id'].lower(), (entry['id'], sb))
@@ -252,7 +255,8 @@ def gw_bundle(game, sb, bundle):
     game = Path(game)
     base_toc, patch_toc = game / 'Data' / (sb + '.toc'), game / 'Update/Patch/Data' / (sb + '.toc')
     base = {e['id'].lower(): e for e in (gw2.read_db(base_toc).get('bundles', []) if base_toc.is_file() else [])}
-    patch = {e['id'].lower(): e for e in (gw2.read_db(patch_toc).get('bundles', []) if patch_toc.is_file() else [])}
+    patch = {e['id'].lower(): e for e in (gw2.read_db(patch_toc).get('bundles', [])
+                                          if patch_toc.is_file() and gw2.patch_applies(game, base_toc) else [])}
 
     def read(toc, entry):
         if entry['offset'] < 0 or not 0 < entry['size'] <= gw2.LIMIT:
@@ -310,17 +314,20 @@ def gw_export(game, kind, items, output):
     if asset_meshes:
         from props import _trim_variations
         tables = variation_index(game, kind)
-        for name in sorted({n for g in asset_meshes for n in tables.get(g, [])[:1]}):
+        # Each mesh takes the first of its tables that is readable and lists it; the rest are fallbacks.
+        covered = set()
+        for name in [n for g in sorted(asset_meshes) for n in tables.get(g, [])]:
             location = by_name.get(name.lower())
-            if location is None:
+            if location is None or not (set(g for g in asset_meshes if name in tables.get(g, [])) - covered):
                 continue
             path, offset, size, source = location
             with path.open('rb') as stream:
                 stream.seek(offset)
                 content = gw2.decompress(gw2.Reader(stream.read(size)), source['original_size'])
             document = gw2.Ebx(content).document()
-            if not _trim_variations(document, asset_meshes):
+            if not _trim_variations(document, asset_meshes - covered):
                 continue
+            covered |= {g for g in asset_meshes if name in tables.get(g, [])}
             entry = dict(source, path='ebx/%s.bin' % source['sha1'], document='ebx/%s.json' % source['sha1'],
                          bytes=len(content), root_type=document['root_type'], guid=document['guid'])
             (output / entry['path']).write_bytes(content)

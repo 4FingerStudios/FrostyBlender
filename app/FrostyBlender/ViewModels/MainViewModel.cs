@@ -61,7 +61,7 @@ public partial class MainViewModel : ObservableObject
         _timer = new DispatcherTimer(TimeSpan.FromSeconds(1.5), DispatcherPriority.Background, async (_, _) => await Tick());
         _timer.Start();
         _ = Tick();
-        if (LinkLoaded) _ = Scan(false);
+        if (LinkLoaded) _ = IsExplorer ? LoadExplorer(false) : Scan(false);
         InitializeUpdates();
     }
 
@@ -73,6 +73,7 @@ public partial class MainViewModel : ObservableObject
         new NavItem(Section.Props, "Props", "\uE7B8"),
         new NavItem(Section.Effects, "Effects", "\uE945"),
         new NavItem(Section.Animations, "Animations", "\uE714"),
+        new NavItem(Section.Explorer, "Explorer", "\uEC50"),
         new NavItem(Section.Settings, "Settings", "\uE713"),
     };
 
@@ -112,7 +113,8 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _signingIn;
 
     public Section Section => SelectedNav?.Section ?? Section.Maps;
-    public bool IsBrowser => Section != Section.Settings;
+    public bool IsBrowser => Section is not (Section.Settings or Section.Explorer);
+    public bool IsExplorer => Section == Section.Explorer;
     public bool IsSettings => Section == Section.Settings;
     public bool HasItems => Section is not Section.Maps;
     public bool IsCharacterLike => Section is Section.Characters or Section.Npcs;
@@ -273,14 +275,19 @@ public partial class MainViewModel : ObservableObject
 
     partial void OnSelectedNavChanged(NavItem value)
     {
-        foreach (var name in new[] { nameof(Section), nameof(IsBrowser), nameof(IsSettings), nameof(HasItems),
+        foreach (var name in new[] { nameof(Section), nameof(IsBrowser), nameof(IsExplorer), nameof(IsSettings), nameof(HasItems),
                      nameof(IsCharacterLike), nameof(IsNpcs), nameof(ShowCursorOption), nameof(IsAnimations), nameof(SectionTitle), nameof(SectionBlurb),
                      nameof(SendText), nameof(ItemsHeader), nameof(Hint) })
             OnPropertyChanged(name);
         if (IsBrowser) _ = Scan(false);
+        if (IsExplorer) _ = LoadExplorer(false);
     }
 
-    partial void OnGameChanged(string value) => _ = Scan(false);
+    partial void OnGameChanged(string value)
+    {
+        if (IsExplorer) _ = LoadExplorer(false);
+        else _ = Scan(false);
+    }
     partial void OnSearchChanged(string value) => Filter();
     partial void OnItemSearchChanged(string value) => BuildRows();
     partial void OnHideAdditiveChanged(bool value) => BuildRows();

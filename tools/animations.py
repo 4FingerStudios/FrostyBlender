@@ -42,7 +42,8 @@ def level_for(game, kind):
 
 
 def cache_dir(game, kind):
-    key = hashlib.sha256(('%s|%s|%s|xenon-v1' % (Path(game).resolve(), kind, level_for(game, kind))).encode()).hexdigest()[:16]
+    level = 'all-levels' if kind == 'gw1' else level_for(game, kind)
+    key = hashlib.sha256(('%s|%s|%s|banks-v2' % (Path(game).resolve(), kind, level)).encode()).hexdigest()[:16]
     base = Path(os.environ.get('AURA_IMPORT_CACHE') or Path(os.environ.get('LOCALAPPDATA') or Path.home()) / 'aura-frostbite')
     return base / ('ant_%s_%s' % (kind, key))
 
@@ -76,22 +77,44 @@ def extract_banks(game, kind, folder):
                     path.write_bytes(archive.fetch(a['ref']))
                     out.append(path)
         return out
-    toc = Path(game) / 'Data' / (level_for(game, kind) + '.toc')
-    for desc, raw, decoded in gw2.bundles_with_patches(Path(game), toc):
-        try:
-            assets, r = gw2.bundle(raw)
-        except (ValueError, struct.error):
+    if kind == 'gw1':
+        # GW1 keeps each Garden Ops enemy's clips in the banks of the levels it appears in (Grave Digger
+        # isn't in Mainstreet's), so every level is read; a bank shared by several levels is kept once.
+        import gw1
+        tocs = [Path(game) / 'Data' / (level['package'] + '.toc') for level in gw1.discover(game)]
+    else:
+        tocs = [Path(game) / 'Data' / (level_for(game, kind) + '.toc')]
+    sizes, levels = {}, {}
+    for toc in tocs:
+        if not toc.is_file():
             continue
-        for a in assets:
-            if a['kind'] == 'resource' and a['name'].lower().endswith('_antstate') and a['original_size'] > 4096:
-                content = r.take(a['original_size']) if decoded else gw2.decompress(r, a['original_size'])
-                path = folder / (a['name'].split('/')[-1] + '.bin')
-                path.write_bytes(content)
-                out.append(path)
-            elif decoded:
-                r.take(a['original_size'])
-            else:
-                _skip(r, a['original_size'])
+        held = levels.setdefault(toc.stem, [])
+        try:
+            for desc, raw, decoded in gw2.bundles_with_patches(Path(game), toc):
+                try:
+                    assets, r = gw2.bundle(raw)
+                except (ValueError, struct.error):
+                    continue
+                for a in assets:
+                    name = a['name'].split('/')[-1]
+                    if a['kind'] == 'resource' and a['name'].lower().endswith('_antstate') and a['original_size'] > 4096:
+                        if name not in held:
+                            held.append(name)
+                    if (a['kind'] == 'resource' and a['name'].lower().endswith('_antstate') and a['original_size'] > 4096
+                            and a['original_size'] > sizes.get(name, 0)):
+                        content = r.take(a['original_size']) if decoded else gw2.decompress(r, a['original_size'])
+                        path = folder / (name + '.bin')
+                        path.write_bytes(content)
+                        sizes[name] = a['original_size']
+                        if path not in out:
+                            out.append(path)
+                    elif decoded:
+                        r.take(a['original_size'])
+                    else:
+                        _skip(r, a['original_size'])
+        except (ValueError, OSError, struct.error) as error:  # one unreadable level must not lose the others
+            print('Skipped animation banks in %s: %s' % (toc.stem, error), flush=True)
+    (folder / 'levels.json').write_text(json.dumps({k: v for k, v in levels.items() if v}), encoding='utf-8')
     return out
 
 
@@ -106,8 +129,22 @@ def banks(game, kind):
     return found
 
 
-def load(game, kind):
-    return ant.Database([ant.read_bank(p.read_bytes()) for p in banks(game, kind)])
+def groups(game, kind):
+    """Bank sets that are read together: GW1 one per level (its own banks plus the shared ones it carries),
+    since levels give the same mapping objects different contents, and a build can mix PC and Xenon levels."""
+    paths = banks(game, kind)
+    listing = paths[0].parent / 'levels.json'
+    if kind != 'gw1' or not listing.is_file():
+        return {'': paths}
+    by_name = {p.stem: p for p in paths}
+    return {level: [by_name[n] for n in names if n in by_name]
+            for level, names in json.loads(listing.read_text(encoding='utf-8')).items()}
+
+
+def load(game, kind, group=None):
+    sets = groups(game, kind)
+    paths = sets.get(group or '') or sets.get(next(iter(sets)))
+    return ant.Database([ant.read_bank(p.read_bytes()) for p in paths])
 
 
 def character_of(rig_name):
@@ -138,21 +175,29 @@ def discover(game):
     index = cache_dir(game, kind) / 'clips.json'
     if index.is_file():
         return with_models(json.loads(index.read_text(encoding='utf-8')))
-    db = load(game, kind)
     characters = {}
-    for anim in db.animations():
-        if anim['__type'] != 'VbrAnimationAsset':
-            continue
-        try:
-            ordered, rig, fps = db.channels(anim, kind)
-        except (ValueError, KeyError, IndexError, TypeError):
-            continue
-        if not rig or not ordered:
-            continue
-        entry = characters.setdefault(rig['__name'], {'rig': rig['__name'], 'name': character_of(rig['__name']), 'clips': []})
-        entry['clips'].append({'name': clean(db.clip_name(anim)), 'key': anim['__guid'], 'frames': anim.get('NumKeys', 0),
-                               'fps': fps, 'additive': bool(anim.get('Additive'))})
-    result = {'game': kind, 'level': level_for(game, kind),
+    for group in groups(game, kind):
+        db = load(game, kind, group)
+        for anim in db.animations():
+            if anim['__type'] != 'VbrAnimationAsset':
+                continue
+            try:
+                ordered, rig, fps = db.channels(anim, kind)
+            except (ValueError, KeyError, IndexError, TypeError):
+                continue
+            if not rig or not ordered:
+                continue
+            entry = characters.setdefault(rig['__name'], {'rig': rig['__name'], 'name': character_of(rig['__name']),
+                                                          'clips': [], 'seen': set()})
+            name = clean(db.clip_name(anim))
+            if name.lower() in entry['seen']:
+                continue  # the same clip in both platforms' banks
+            entry['seen'].add(name.lower())
+            entry['clips'].append({'name': name, 'key': anim['__guid'], 'frames': anim.get('NumKeys', 0),
+                                   'fps': fps, 'additive': bool(anim.get('Additive')), 'banks': group})
+    for entry in characters.values():
+        entry.pop('seen')
+    result = {'game': kind, 'level': 'all levels' if kind == 'gw1' else level_for(game, kind),
               'characters': sorted((c for c in characters.values() if len(c['clips']) >= 3), key=lambda c: c['name'].lower())}
     for c in result['characters']:
         c['clips'].sort(key=lambda x: x['name'].lower())
@@ -162,11 +207,15 @@ def discover(game):
 
 def export(game, items, out):
     kind = game_kind(game)
-    db = load(game, kind)
+    dbs = {}
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     written, errors = [], []
     for item in items:
+        group = item.get('banks')
+        if group not in dbs:
+            dbs[group] = load(game, kind, group)
+        db = dbs[group]
         anim = db.get(item['key'])
         if anim is None:
             errors.append({'clip': item.get('name'), 'error': 'Not in the animation banks'})

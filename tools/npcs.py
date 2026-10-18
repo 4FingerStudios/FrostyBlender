@@ -118,18 +118,20 @@ def discover(game):
 OBJECT_GROUPS = {'simple': 'Ability', 'simpleobject': 'Ability', 'vehicle': 'Vehicle', 'boss': 'Boss', 'subboss': 'Boss',
                  'turret': 'Deployable', 'horde': 'Horde', 'ai': 'AI'}
 OBJECT_SKIP = re.compile(r'(^|/)(fx|vfx|ui|levels?|levels_sandbox|worlds|sound|online)/|emitters|vfx_|collision|_lod\d|'
-                         r'shadow|debris|destruction|/playable/|_1p_|firstperson')
+                         r'shadow|debris|destruction|/playable/|_1p_|firstperson|/_old/')
 FOLDER_WORDS = {'rigandmodel', 'body', 'base', 'prop', 'mech', 'costume', 'meshes', 'abilities'}
 # Pickups and level props that happen to share these folders are not characters.
 NOT_OBJECTS = {'bagofcoins', 'rotatingcoin', 'spinningdiamond'}
 # Abilities whose meshes go by another name than their skeleton folder.
 OBJECT_ALIASES = {'cactusdrone': ['garlicdrone', 'cactusgarlic'], 'engineer_bullhorn_mine': ['sonicmine', 'bullhorn'],
-                  'pirateparrot': ['parrotvehicle'], 'engineer_drone': ['engineerdrone'], 'tallnuts': ['tallnut_four']}
+                  'pirateparrot': ['parrotvehicle'], 'engineer_drone': ['engineerdrone'], 'tallnuts': ['tallnut_four'],
+                  'flax_canon': ['flaxcannon']}
 # Words in an object's name that only say whose ability it is.
 OWNER_WORDS = ('engineer', 'cactus', 'pirate', 'peashooter', 'chomper', 'sunflower', 'scientist', 'soldier', 'allstar',
                'rose', 'citron', 'imp', 'zombie', 'plant')
 # GW1 keeps every object under one folder; these are the zombie side.
 GW1_ZOMBIE_OBJECTS = {'revivalspring', 'teleporter', 'engineer_drone', 'engineer_bullhorn_mine', 'allstarimpgrenade',
+                      'allstar_wall', 'pirate_imp', 'engineer_pileofjunk', 'shield_decoy', 'mech_zombie_imp',
                       'armgrenade', 'tactical_cuke'}
 
 
@@ -201,11 +203,14 @@ def objects(game, kind, known):
         if not info['skeleton'] and any(k in norm(n.rsplit('/', 1)[-1]) for n in skeletons for k in _keys(oid) if len(k) >= 8):
             info['skeleton'] = True
     meshes = sorted(n for n in names if n.endswith('_mesh') and not OBJECT_SKIP.search(n.replace('/playable/', '/')))
-    weapons = [n for n in meshes if '/weapons/' in n or n.startswith(('gameplay/', '_pvz/weapons/')) or '/abilities/' in n]
+    weapons = [n for n in meshes if '/weapons/' in n or n.startswith(('gameplay/', '_pvz/weapons/', '_pvz/vehicles/'))
+               or '/abilities/' in n]
     out = {}
     for oid, info in folders.items():
-        if not info['skeleton'] or norm(oid) in known or oid in NOT_OBJECTS:
+        if norm(oid) in known or oid in NOT_OBJECTS:
             continue
+        if not info['skeleton'] and kind != 'gw1':
+            continue  # GW1 keeps some objects' skeletons elsewhere (Pirate Imp, Gnome Bomb): their meshes still count
         groups = info['groups']
         group = 'Ability' if groups & {'simple', 'simpleobject'} else OBJECT_GROUPS.get(sorted(groups)[0], 'AI')
         prefixes = sorted(info['prefixes'])
@@ -222,7 +227,7 @@ def objects(game, kind, known):
         if not own and not held:
             continue
         team = info['team']
-        team = 'Zombies' if team.startswith('zombie') or oid in GW1_ZOMBIE_OBJECTS else 'Gnomes' if team.startswith('gnome') else 'Plants'
+        team = 'Zombies' if team.startswith('zombie') or oid in GW1_ZOMBIE_OBJECTS else             'Gnomes' if team.startswith('gnome') or oid.startswith('gnome') else 'Plants'
         entry = out.setdefault(oid, {'name': title(oid), 'id': oid, 'team': team, 'group': group, 'slots': {}})
         for mesh, prefix in own + [(n, None) for n in held]:
             leaf = re.sub(r'_mesh$', '', mesh.rsplit('/', 1)[-1])

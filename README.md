@@ -48,6 +48,8 @@ BFN's files are encrypted. Paste your BFN initfs key into **BFN key** in the add
 
 GW1 Xenon build support: the importer also reads the build with `Xenon/` bundle names and big-endian assets, including builds whose files are stored under `Data/Win32`. Set **Garden Warfare 1** in the add-on preferences to the folder holding `PVZ.Main_Win64_Retail.exe` (for example `D:\GW1`). Use the normal GW1 tabs. Maps, static props, skinned characters and NPCs, textures, effects and animation banks use the same import workflow. A build missing the usual Mainstreet animation bank automatically uses an available map's bank.
 
+Hybrid GW1 installs (Xenon game data with a PC `Update/Patch` folder, and PC levels beside Xenon ones) are read superbundle by superbundle: the PC patch only applies where its platform matches. Animations come from every level's banks, so Garden Ops enemies such as Grave Digger, Gargantuar, Yeti and Zomboss have their clips. NPCs include the objects without their own skeleton (Gnome Bomb, Pirate Imp, Flax Cannon, All-Star Wall, Shield Decoy and more).
+
 Xenon texture exports untile and byte-swap the highest-resolution 2D mip before decoding; the selected texture-size limit still applies. Capture-point statues and pedestal pieces are available through Props. Grave Digger uses the Browncoat character skeleton, and Disco Zombie uses its dedicated skeleton from the Browncoat folder. Cubemaps, volume textures, native lighting and full terrain splat shaders remain outside the existing material approximation.
 
 Run synthetic PC/Xenon format regression checks with `python -m unittest discover -s tests -p test_gw1_xenon.py -v`. Fixtures are generated in memory and contain no game assets.
@@ -65,6 +67,7 @@ Everything lives in the 3D Viewport sidebar (press **N**). Pick the game with th
 | **Effects** | Explosions, smoke, sparks and muzzle flashes from GW1 and GW2, such as the Chili Bean blast. Each emitter becomes a Geometry Nodes particle object with its flipbook textures, colour and fade curves, plus the effect's lights. Press play to watch it; quads face the scene camera. GPU emitters, ribbon trails and motion-stretched sparks are included, with forces following their over-life curves (checked against V0e's VFX Editor plugin). Heat distortion, wind, collisions and sounds are not ported. |
 | **Game shaders** (optional) | Tick **Game shaders** before importing GW1/GW2 maps, characters, NPCs or props. Materials are then wired the way the games' own shaders read their textures, decoded from GW2's compiled shaders: ASM (occlusion, smoothness, metalness), ETT (emissive and tint masks), paint tints by UV quadrant, and the R x A normal maps. Off by default; BFN keeps the default materials. |
 | **Animations** | Animation clips for a character, NPC or ability you imported. The tab names the model each set of clips plays on. Select its armature, pick clips and click **Import selected**. |
+| **Explorer** (app) | Every file in the game as folders, with search. Click a file to see what it is and a preview of textures. Export any selection: textures and UI art as PNG, game data (EBX) as readable JSON plus the raw file, other resources as raw files. Tick meshes and send them straight to Blender. Battle for Neighborville game data saves raw only, since the app doesn't hold the BFN key. |
 
 Tips:
 - Import a character's body first, then add hats, props and weapons. Items you add later go onto the same armature, so the whole character animates together.
@@ -73,7 +76,7 @@ Tips:
 
 ## FrostyBlender app
 
-A desktop app for browsing everything in the games, in the style of Fortnite Porting. Pick **Maps**, **Characters**, **NPCs**, **Props**, **Effects** or **Animations**, choose GW1 / GW2 / BFN, click a tile, tick what you want and press **Send to Blender**.
+A desktop app for browsing everything in the games, in the style of Fortnite Porting. Pick **Maps**, **Characters**, **NPCs**, **Props**, **Effects**, **Animations** or **Explorer**, choose GW1 / GW2 / BFN, click a tile, tick what you want and press **Send to Blender**.
 
 1. Install the add-on (above) and open Blender once. The add-on tells the app where Blender, its tools and your game folders are.
 2. Run `FrostyBlender-…-windows-x64.exe`. It needs add-on 1.9.1 or newer for icons and loading screens.

@@ -29,7 +29,7 @@ def discover(game):
     if not is_gw1(game):
         return []
     maps = {}
-    for data in (game / 'Data', game / 'Update/Patch/Data'):
+    for data in gw2.data_roots(game):
         levels = data / 'Win32/_pvz/Levels'
         if not levels.is_dir():
             continue
@@ -97,7 +97,7 @@ def finish(game, output, inventory):
                 for a in inventory['assets'])
     inventory['platform'] = 'xenon' if xenon else 'win32'
     index = {}
-    for base in (game / 'Data/Win32', game / 'Update/Patch/Data/Win32'):
+    for base in (root / 'Win32' for root in gw2.data_roots(game)):
         for toc in sorted(base.glob('*chunks.toc')):
             for chunk in gw2.read_db(toc).get('chunks', []):
                 index[chunk['id']] = (toc.with_suffix('.sb'), chunk)

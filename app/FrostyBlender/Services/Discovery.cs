@@ -22,6 +22,7 @@ public sealed class Discovery
         Section.Npcs => "npcs-discover",
         Section.Props => "props-discover",
         Section.Effects => "effects-discover",
+        Section.Explorer => "explorer-list",
         Section.Animations => "animations-discover",
         _ => throw new ArgumentOutOfRangeException(nameof(section)),
     };
@@ -77,6 +78,45 @@ public sealed class Discovery
         await File.WriteAllTextAsync(cache, result.ToJsonString());
         return result;
     }
+
+    /// <summary>Runs one bridge action that writes its answer to --out (no caching), e.g. the explorer's
+    /// inspect and export. `extra` are further arguments in pairs.</summary>
+    public async Task<JsonObject> Run(string action, string game, params string[] extra)
+    {
+        var info = _link.Info ?? throw new InvalidOperationException(
+            "Open Blender once with the FrostyBlender add-on installed, then try again.");
+        var folder = info.GameFolder(game);
+        if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
+            throw new InvalidOperationException($"The {game} folder isn't set in the add-on's preferences.");
+        var output = Path.Combine(Path.GetTempPath(), $"frostyblender_{Guid.NewGuid():N}.json");
+        var start = new ProcessStartInfo(info.Python)
+        {
+            CreateNoWindow = true, UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true,
+        };
+        foreach (var arg in new[] { info.Bridge, action, "--tools", info.Tools, "--game", folder, "--reader", info.Reader, "--out", output })
+            start.ArgumentList.Add(arg);
+        foreach (var arg in extra) start.ArgumentList.Add(arg);
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("Couldn't start Blender's Python");
+        var stderr = process.StandardError.ReadToEndAsync();
+        _ = process.StandardOutput.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        try
+        {
+            var result = JsonNode.Parse(await File.ReadAllTextAsync(output))!.AsObject();
+            if (result["ok"]?.GetValue<bool>() != true)
+                throw new InvalidOperationException(result["error"]?.GetValue<string>() ?? "unknown error");
+            return result;
+        }
+        catch (IOException)
+        {
+            var lines = (await stderr).Trim().Split(Environment.NewLine);
+            throw new InvalidOperationException(lines.Length > 0 ? lines[^1].Trim() : "no output");
+        }
+        finally
+        {
+            try { File.Delete(output); } catch (IOException) { }
+        }
+    }
 }
 
-public enum Section { Maps, Characters, Npcs, Props, Effects, Animations, Settings }
+public enum Section { Maps, Characters, Npcs, Props, Effects, Animations, Explorer, Settings }
