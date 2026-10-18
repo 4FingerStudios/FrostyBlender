@@ -213,10 +213,9 @@ class FrostbiteState(bpy.types.PropertyGroup):
     index: IntProperty()
     texture_size: EnumProperty(name='Texture size', default='1024', items=[
         ('512', '512', ''), ('1024', '1024', ''), ('2048', '2048', 'Largest; uses much more disk')])
-    game_shaders: BoolProperty(name='Game shaders', default=False,
-                               description='Garden Warfare 1 and 2: build materials the way the games\' shaders read '
-                                           'their textures (ambient occlusion, smoothness, metalness, tint masks, '
-                                           'emissive). Off: the simpler default materials')
+    game_shaders: BoolProperty(name='GW2 game shaders', default=False,
+                               description='Use GW2 packed masks for occlusion, smoothness, metalness, tint and emission. '
+                                           'GW1 materials handle their authored channels automatically')
     keep: BoolProperty(name='Keep intermediate files', default=False,
                        description='Keep raw archive exports and decoded textures (several GB) for debugging')
     include_collision: BoolProperty(name='Collision objects', default=False,
