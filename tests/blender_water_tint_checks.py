@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory() as tmp:
         image.save()
         bpy.data.images.remove(image)
 
-    def render_color(doc, label):
+    def render_color(doc, label, physical=False):
         mat = bpy.data.materials.new(label)
         build_material(mat, dict(profile='gw1', **doc), importer.image)
         bsdf = next(n for n in mat.node_tree.nodes if n.type == 'BSDF_PRINCIPLED')
@@ -58,7 +58,8 @@ with tempfile.TemporaryDirectory() as tmp:
             mat.node_tree.links.new(socket.links[0].from_socket, emit.inputs['Color'])
         else:
             emit.inputs['Color'].default_value = socket.default_value
-        mat.node_tree.links.new(emit.outputs[0], output.inputs['Surface'])
+        if not physical:
+            mat.node_tree.links.new(emit.outputs[0], output.inputs['Surface'])
         plane.data.materials.clear()
         plane.data.materials.append(mat)
         scene.render.filepath = str(assets/(label+'.exr'))
@@ -86,6 +87,29 @@ with tempfile.TemporaryDirectory() as tmp:
     pixels = render_color({'vectors': {'Q%d_TintColour' % (i+1): c for i, c in enumerate(colors)}}, 'quadrants')
     for (x, y), expected in zip([(6, 6), (1, 6), (6, 1), (1, 1)], colors):
         close(pixel(pixels, x, y), expected)
+
+    # GW1 Xenon's normal_default and black mask must not extinguish a roof.
+    for label, color in [('black', (0, 0, 0, 1)), ('neutral', (.5, .5, 1, 1))]:
+        image = bpy.data.images.new(label, 4, 4, alpha=True)
+        image.generated_color = color
+        image.filepath_raw = str(assets/(label+'.png'))
+        image.file_format = 'PNG'
+        image.save()
+        bpy.data.images.remove(image)
+    scene.world.use_nodes = True
+    scene.world.node_tree.nodes['Background'].inputs['Color'].default_value = (1, 1, 1, 1)
+    scene.world.node_tree.nodes['Background'].inputs['Strength'].default_value = 1
+    surface = {'vectors': {'Diffuse': [.5, .3, .2, 1], 'Smoothness': [0], 'Specular_Scale': [0]}}
+    baseline = pixel(render_color(surface, 'roof_baseline', physical=True))
+    black = pixel(render_color(dict(surface, textures={'normal': 'black.png', 'specular_masks': 'black.png'}),
+                               'roof_black_placeholders', physical=True))
+    close(black, baseline)
+    assert min(black) > .05, black
+    for path, expected_link in [('black.png', False), ('neutral.png', True)]:
+        material = bpy.data.materials.new('normal placeholder check')
+        build_material(material, {'profile': 'gw1', 'textures': {'normal': path}}, importer.image)
+        bsdf = next(n for n in material.node_tree.nodes if n.type == 'BSDF_PRINCIPLED')
+        assert bsdf.inputs['Normal'].is_linked == expected_link, path
 
     mat = bpy.data.materials.new('Water check')
     build_material(mat, {'surface': 'water', 'profile': 'gw1', 'shader_name': 'Ocean_Coastal',

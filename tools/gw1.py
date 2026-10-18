@@ -10,6 +10,8 @@ Terrain trees parse with gw2_terrain; their heightfield tile chunks are fetched 
 import json
 import re
 import struct
+import threading
+from archive_parallel import ordered_map
 from pathlib import Path
 
 import gw2
@@ -84,13 +86,18 @@ def stream_size(data):
     return total
 
 
-def export(game, package, output):
+def export(game, package, output, jobs=None):
     game, output = Path(game), Path(output)
-    return finish(game, output, gw2.export(game, package, output))
+    resource_data = {}
+    return finish(game, output, gw2.export(game, package, output, jobs, resource_data), resource_data, jobs)
 
 
-def finish(game, output, inventory):
+def finish(game, output, inventory, resource_data=None, jobs=None):
     game, output = Path(game), Path(output)
+    def read_resource(asset):
+        if resource_data is not None and asset['path'] in resource_data:
+            return resource_data[asset['path']]
+        return (output / asset['path']).read_bytes()
     inventory['profile'] = 'gw1'
     from gw1_xenon import TEXTURE as XENON_TEXTURE, texture as xenon_texture
     xenon = any(a.get('resource_type') == XENON_TEXTURE or a.get('bundle', '').lower().startswith('xenon/')
@@ -100,7 +107,7 @@ def finish(game, output, inventory):
         # Cooked terrain shaders and character defaults live in anonymous shader
         # databases, not the stripped ShaderGraph EBX. Keep each database by name.
         existing = {a['name'] for a in inventory['assets'] if a.get('resource_type') == 0x36f3f2c0}
-        for source, offset, size, asset in gw2.cached_dependency_index(game)['resource'].values():
+        for source, offset, size, asset in gw2.cached_dependency_index(game, jobs)['resource'].values():
             if asset.get('resource_type') != 0x36f3f2c0 or asset['name'] in existing:
                 continue
             with source.open('rb') as stream:
@@ -133,7 +140,7 @@ def finish(game, output, inventory):
             content = gw2.decompress(gw2.Reader(data), stream_size(data))
         else:
             if not shared:
-                shared.update(gw2.cached_dependency_index(game))
+                shared.update(gw2.cached_dependency_index(game, jobs))
             location = shared['chunk'].get(guid)
             if location is None:
                 raise ValueError('GW1 chunk %s is in no TOC or bundle' % guid)
@@ -155,7 +162,7 @@ def finish(game, output, inventory):
     for asset in inventory['assets']:
         if asset.get('resource_type') != MESHSET or 'bytes' not in asset:
             continue
-        mesh = (output / asset['path']).read_bytes()
+        mesh = read_resource(asset)
         candidates = gw2.mesh_chunk_guids(mesh)
         if not candidates:
             continue
@@ -174,7 +181,7 @@ def finish(game, output, inventory):
         if asset.get('resource_type') != TERRAIN_TREE or 'bytes' not in asset:
             continue
         try:
-            tree = terrain_tree((output / asset['path']).read_bytes())
+            tree = terrain_tree(read_resource(asset))
         except (ValueError, struct.error) as error:
             inventory['errors'].append({'name': asset['name'], 'stage': 'terrain', 'error': str(error)})
             continue
@@ -191,17 +198,28 @@ def finish(game, output, inventory):
                 inventory['errors'].append({'name': tile['guid'], 'stage': 'terrain chunk', 'error': str(error)})
     print('GW1 terrain chunks:', tiles, flush=True)
     fetched = 0
-    for asset in inventory['assets']:
+    texture_jobs = []
+    locks = {}
+    texture_base = len(inventory['assets'])
+    additions = []
+    texture_events = {}
+    # Fetch source chunks before normalization so aliases never mistake an
+    # already-linearized chunk for the original tiled stream.
+    for asset in list(inventory['assets']):
         if asset.get('resource_type') not in (GW1_TEXTURE, XENON_TEXTURE) or 'bytes' not in asset:
             continue
-        header = (output / asset['path']).read_bytes()
+        event = {'chunks': [], 'linear': None, 'error': None}
+        additions.append(event)
+        texture_events[id(asset)] = event
+        before_fetch = len(inventory['assets'])
+        header = read_resource(asset)
         is_xenon = asset['resource_type'] == XENON_TEXTURE
         guid = gw2.guid_big(header[28:44]) if is_xenon else header[28:44].hex()
         item = chunks.get(guid)
         full = sum(struct.unpack_from(('>' if is_xenon else '<') + '15I', header, 44)[:min(header[26], 15)])
         try:
             if item is None or item.get('bytes') != full:
-                try:  # streaming TOCs first, then any bundle (menu art lives only in bundles)
+                try:
                     item = fetch(guid)
                     fetched += 1
                 except ValueError:
@@ -209,18 +227,29 @@ def finish(game, output, inventory):
                         raise
             if item is None or 'bytes' not in item:
                 raise ValueError('GW1 texture chunk unavailable')
-            # The original header stays in place, so the fix-up can run again on the same export.
+            texture_jobs.append((asset, header, is_xenon, guid, dict(item)))
+            locks.setdefault(guid, threading.Lock())
+        except (ValueError, OSError, struct.error) as error:
+            asset['error'] = str(error)
+            event['error'] = {'name': asset['name'], 'stage': 'texture', 'error': str(error)}
+        finally:
+            event['chunks'] = inventory['assets'][before_fetch:]
+
+    def normalize_texture(task):
+        original, header, is_xenon, guid, item = task
+        asset = dict(original)
+        linear_item = None
+        try:
             if is_xenon:
                 converted, linear = xenon_texture(header, (output / item['path']).read_bytes())
-                # Keep original tiled chunks intact, so normalization can be rerun safely.
-                item = dict(item, path='chunk/linear-%s.bin' % guid, bytes=len(linear))
-                (output / item['path']).write_bytes(linear)
-                chunks[guid] = item
-                inventory['assets'].append(item)
+                linear_item = dict(item, path='chunk/linear-%s.bin' % guid, bytes=len(linear))
+                with locks[guid]:
+                    (output / linear_item['path']).write_bytes(linear)
             else:
                 converted = texture_header(header, item['bytes'])
             asset['path'] = asset['path'][:-len('.bin')] + '.texture.bin'
-            (output / asset['path']).write_bytes(converted)
+            with locks[guid]:
+                (output / asset['path']).write_bytes(converted)
             asset['resource_type'] = TEXTURE
             if is_xenon:
                 asset['metadata'] = list(struct.pack('<4I', 11, 0, 0, 0))
@@ -228,7 +257,25 @@ def finish(game, output, inventory):
             asset['source_format'] = struct.unpack_from(('>' if is_xenon else '<') + 'I', header, 12)[0]
         except (ValueError, OSError, struct.error) as error:
             asset['error'] = str(error)
-            inventory['errors'].append({'name': asset['name'], 'stage': 'texture', 'error': str(error)})
+            return original, asset, None, {'name': asset['name'], 'stage': 'texture', 'error': str(error)}
+        return original, asset, linear_item, None
+
+    for original, updated, linear_item, error in ordered_map(normalize_texture, texture_jobs, jobs):
+        original.update(updated)
+        if linear_item is not None:
+            chunks[linear_item['guid']] = linear_item
+            texture_events[id(original)]['linear'] = linear_item
+        if error is not None:
+            texture_events[id(original)]['error'] = error
+    # Restore the serial append sequence (fetch, normalize, next texture),
+    # independently of worker completion order and the prefetch pass.
+    del inventory['assets'][texture_base:]
+    for event in additions:
+        inventory['assets'].extend(event['chunks'])
+        if event['linear'] is not None:
+            inventory['assets'].append(event['linear'])
+        if event['error'] is not None:
+            inventory['errors'].append(event['error'])
     print('GW1 full texture chunks:', fetched, flush=True)
     (output / 'inventory.json').write_text(json.dumps(inventory, indent=2), encoding='utf-8')
     return inventory
@@ -240,9 +287,10 @@ if __name__ == '__main__':
     parser.add_argument('--game', required=True)
     parser.add_argument('--map')
     parser.add_argument('--out')
+    parser.add_argument('--jobs', type=int, help='Archive workers (default: AURA_IMPORT_JOBS or up to 8)')
     args = parser.parse_args()
     if args.map and args.out:
-        result = export(args.game, args.map, args.out)
+        result = export(args.game, args.map, args.out, args.jobs)
         print('GW1 assets:', len(result['assets']), 'errors:', len(result['errors']))
     else:
         print(json.dumps(discover(args.game), indent=2))

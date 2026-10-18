@@ -204,6 +204,7 @@ class Archive:
             self.install[folder] = [c['name'] for c in doc.get('installManifest', {}).get('installChunks', [])]
         self.install.setdefault('Patch', self.install.get('Data', []))
         self.tocs, self.handles, self.lock = {}, {}, threading.Lock()
+        self.read_locks = {}
         self.oodle = Oodle(game)
 
     def read(self, path, offset, size):
@@ -211,6 +212,11 @@ class Archive:
             handle = self.handles.get(path)
             if handle is None:
                 handle = self.handles[path] = open(path, 'rb')
+                self.read_locks[path] = threading.Lock()
+            read_lock = self.read_locks[path]
+        # Protect seek/read on each handle, not every CAS file in the archive.
+        # Parallel readers of independent files can now make progress together.
+        with read_lock:
             handle.seek(offset)
             data = handle.read(size)
         if len(data) != size:

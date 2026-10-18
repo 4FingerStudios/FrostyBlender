@@ -26,6 +26,10 @@ Bring maps, characters, customizations, NPCs, props and animations from **Plants
 
 Nothing else to install: the add-on brings its own tools and runs them on Blender's built-in Python.
 
+GW1/GW2 archive extraction and dependency scans use up to eight workers automatically. GW1 Xenon texture normalization also runs in parallel, duplicate assets are skipped before decompression, and parsed documents and resource headers are reused instead of reopening their exported files. BFN can read independent CAS files concurrently. Work queues are bounded and results retain source order. Set `AURA_IMPORT_JOBS=1` for serial operation, or choose a worker count up to 16; the GW1/GW2 command-line exporters also accept `--jobs`.
+
+On the tested GW1 Coop Coastal build, using Blender 5.3's bundled Python and a warm dependency cache, archive export and texture normalization took 50.3 seconds before these changes, 19.2 seconds with the optimized serial path, and 10.4 seconds with eight workers. All 11,632 inventory entries and 17,199 exported files were checked for equality against the previous exporter. This measures archive export, not the full Blender import; speed depends on the build, storage and machine. Repeatable timings and comparison results are kept locally under `dist/performance`.
+
 ## Install
 
 Download both files from the [latest release](https://github.com/4FingerStudios/FrostyBlender/releases/latest):
@@ -59,6 +63,8 @@ Material imports select the diffuse image for Solid view's Texture display, keep
 GW1 map imports include water entities as bounded surfaces with animated Blender water materials. Exports preserve the original shader graph, water settings and native shader databases under `assets/shaders/frostbite`. Water textures and constants are recovered from supported Xenon shader tables; graph-to-table linkage remains undecoded. Blender approximates refraction, drifting normals and foam, without the game's projected grid, shoreline depth or interactive wave simulation. Terrain layer blending remains unfinished.
 
 GW1 materials automatically use authored `Tint_Colour` and `Tint_Color`, both quadrant tint naming conventions, material variation overrides and SSO tint masks. Re-export maps and props to regenerate variation settings. Render checks for tints and water can be run with `blender --background --factory-startup --python-exit-code 1 --python tests/blender_water_tint_checks.py`.
+
+GW1's tiny black `normal_default` placeholder is treated as an unmodified surface normal. This avoids black roofs and walls when the game binds its default normal and black tint mask instead of authored maps.
 
 GW1 character and prop materials now retain PSA, detail, quadrant and light-mask textures. Packed alpha is kept independent of RGB, preventing black opaque surfaces. Glass uses authored opacity and color; cutout shaders use texture alpha; Disco's light atlas animates with the timeline. PSA/SSO highlights, velvet grain and sheen are translated into Principled shading rather than running the original GPU shaders, so their appearance is an approximation. Use Material Preview or Rendered view to see transparency and emission.
 

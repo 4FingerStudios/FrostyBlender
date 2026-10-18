@@ -8,6 +8,9 @@ import struct
 import zlib
 import json
 import mmap
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from archive_parallel import worker_count, ordered_map
 from pathlib import Path
 try:
     import lz4.block as fast_lz4
@@ -224,8 +227,10 @@ def lz4(data, size):
         count = length(token & 15) + 4
         if not distance or distance > len(out) or count > size - len(out):
             raise ValueError('Invalid GW2 LZ4 match')
-        for _ in range(count):
-            out.append(out[-distance])
+        # LZ4 matches overlap: repeat the previous distance-byte sequence in
+        # native bytearray operations instead of appending one byte in Python.
+        pattern = out[-distance:]
+        out.extend((pattern * ((count + distance - 1) // distance))[:count])
     if len(out) != size:
         raise ValueError('GW2 LZ4 output size mismatch')
     return bytes(out)
@@ -407,95 +412,127 @@ def bundles_with_patches(game, toc):
             yield entry, read_entry(patch_toc, entry), False
 
 
-def dependency_index(game):
-    """Index shared base assets without copying or decoding whole superbundles."""
+def _index_toc(toc):
     indexes = {'ebx': {}, 'resource': {}, 'chunk': {}}
     guid_by_hash = {}
-    for toc in sorted((Path(game) / 'Data/Win32').rglob('*.toc')):
-        doc = read_db(toc)
-        descriptions = doc.get('bundles', [])
-        if not descriptions:
-            continue
-        source = toc.with_suffix('.sb')
-        with source.open('rb') as stream, mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as mapping:
-            for description in descriptions:
-                start, size = description['offset'], description['size']
-                if start < 0 or size < 36 or start + size > len(mapping):
-                    raise ValueError('Invalid GW2 dependency bundle range')
-                metadata_size = struct.unpack_from('>I', mapping, start)[0] + 4
-                if not 36 <= metadata_size <= min(LIMIT, size):
-                    raise ValueError('Invalid GW2 dependency metadata range')
-                assets, metadata = bundle(mapping[start:start + metadata_size])
-                at = start + metadata.at
-                for asset in assets:
-                    begin, remaining = at, asset['original_size']
-                    while remaining:
-                        if at + 8 > start + size:
-                            raise ValueError('Truncated GW2 dependency block')
-                        decoded = struct.unpack_from('>I', mapping, at)[0] & 0xffffff
-                        kind = struct.unpack_from('<H', mapping, at + 4)[0]
-                        packed = struct.unpack_from('>H', mapping, at + 6)[0] | ((kind >> 8 & 15) << 16)
-                        if not decoded or decoded > remaining:
-                            raise ValueError(f'Invalid dependency block length in {source.name}: {asset["name"]} '
-                                             f'at {at:#x}, decoded {decoded}, remaining {remaining}')
-                        at += 8 + (decoded if kind & 127 == 0 else packed)
-                        remaining -= decoded
-                        if at > start + size:
-                            raise ValueError('GW2 dependency block overrun')
-                    kind = asset['kind']
-                    if kind == 'ebx':
-                        sha = asset['sha1']
-                        if sha not in guid_by_hash:
-                            first = block(Reader(mapping[begin:at])) if at > begin else b''
-                            guid_by_hash[sha] = (guid_big(first[40:56]) if first[:4] in (b'\x0f\xb2\xd1\xce', b'\x0f\xb4\xd1\xce')
-                                                 else first[40:56].hex()) if len(first) >= 56 else ''
-                        key = guid_by_hash[sha]
-                    else:
-                        key = asset.get('resource_id', asset.get('guid'))
-                        if kind == 'resource' and key == '0':
-                            key = 'anonymous:%08x:%s' % (asset['resource_type'], asset['name'])
-                    if not key:
-                        continue
-                    old = indexes[kind].get(key)
-                    if old is None or asset['original_size'] > old[3]['original_size']:
-                        indexes[kind][key] = (source, begin, at - begin, asset)
+    doc = read_db(toc)
+    descriptions = doc.get('bundles', [])
+    if not descriptions:
+        return indexes
+    source = toc.with_suffix('.sb')
+    with source.open('rb') as stream, mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as mapping:
+        for description in descriptions:
+            start, size = description['offset'], description['size']
+            if start < 0 or size < 36 or start + size > len(mapping):
+                raise ValueError('Invalid GW2 dependency bundle range')
+            metadata_size = struct.unpack_from('>I', mapping, start)[0] + 4
+            if not 36 <= metadata_size <= min(LIMIT, size):
+                raise ValueError('Invalid GW2 dependency metadata range')
+            assets, metadata = bundle(mapping[start:start + metadata_size])
+            at = start + metadata.at
+            for asset in assets:
+                begin, remaining = at, asset['original_size']
+                while remaining:
+                    if at + 8 > start + size:
+                        raise ValueError('Truncated GW2 dependency block')
+                    decoded = struct.unpack_from('>I', mapping, at)[0] & 0xffffff
+                    kind = struct.unpack_from('<H', mapping, at + 4)[0]
+                    packed = struct.unpack_from('>H', mapping, at + 6)[0] | ((kind >> 8 & 15) << 16)
+                    if not decoded or decoded > remaining:
+                        raise ValueError(f'Invalid dependency block length in {source.name}: {asset["name"]} '
+                                         f'at {at:#x}, decoded {decoded}, remaining {remaining}')
+                    at += 8 + (decoded if kind & 127 == 0 else packed)
+                    remaining -= decoded
+                    if at > start + size:
+                        raise ValueError('GW2 dependency block overrun')
+                kind = asset['kind']
+                if kind == 'ebx':
+                    sha = asset['sha1']
+                    if sha not in guid_by_hash:
+                        first = block(Reader(mapping[begin:at])) if at > begin else b''
+                        guid_by_hash[sha] = (guid_big(first[40:56]) if first[:4] in (b'\x0f\xb2\xd1\xce', b'\x0f\xb4\xd1\xce')
+                                             else first[40:56].hex()) if len(first) >= 56 else ''
+                    key = guid_by_hash[sha]
+                else:
+                    key = asset.get('resource_id', asset.get('guid'))
+                    if kind == 'resource' and key == '0':
+                        key = 'anonymous:%08x:%s' % (asset['resource_type'], asset['name'])
+                if not key:
+                    continue
+                old = indexes[kind].get(key)
+                if old is None or asset['original_size'] > old[3]['original_size']:
+                    indexes[kind][key] = (source, begin, at - begin, asset)
+    return indexes
+
+
+def dependency_index(game, jobs=None):
+    """Scan independent superbundle mappings concurrently, merge in TOC order."""
+    indexes = {'ebx': {}, 'resource': {}, 'chunk': {}}
+    tocs = sorted((Path(game) / 'Data/Win32').rglob('*.toc'))
+    for partial in ordered_map(_index_toc, tocs, jobs):
+        for kind, entries in partial.items():
+            for key, value in entries.items():
+                old = indexes[kind].get(key)
+                if old is None or value[3]['original_size'] > old[3]['original_size']:
+                    indexes[kind][key] = value
     print('GW2 shared dependency index:', {key: len(value) for key, value in indexes.items()}, flush=True)
     return indexes
 
 
-def cached_dependency_index(game):
-    """dependency_index, kept on disk between imports. The key covers the game folder and every
-    TOC's size and time, so an update rebuilds it. Set AURA_IMPORT_CACHE to move the cache."""
+_DEPENDENCY_MEMORY = {}
+
+
+def cached_dependency_index(game, jobs=None):
+    """Index cached in memory and on disk. TOC and SB size/time changes rebuild
+    it. Set AURA_IMPORT_CACHE to choose its disk folder."""
     import hashlib
     import os
     import pickle
     tocs = sorted((Path(game) / 'Data/Win32').rglob('*.toc'))
-    key = hashlib.sha256(repr(['endian-v3-anonymous', str(Path(game).resolve())] + [(str(t), t.stat().st_size, t.stat().st_mtime_ns)
-                                                              for t in tocs]).encode()).hexdigest()[:24]
+    files = tocs + [t.with_suffix('.sb') for t in tocs if t.with_suffix('.sb').is_file()]
+    key = hashlib.sha256(repr(['parallel-v4', str(Path(game).resolve())] + [(str(t), t.stat().st_size, t.stat().st_mtime_ns)
+                                                              for t in files]).encode()).hexdigest()[:24]
+    if key in _DEPENDENCY_MEMORY:
+        return _DEPENDENCY_MEMORY[key]
     folder = Path(os.environ.get('AURA_IMPORT_CACHE') or Path(os.environ.get('LOCALAPPDATA') or Path.home()) / 'aura-frostbite')
     path = folder / ('dependencies_%s.pickle' % key)
     try:
         with path.open('rb') as stream:
             indexes = pickle.load(stream)
+        _DEPENDENCY_MEMORY.clear()
+        _DEPENDENCY_MEMORY[key] = indexes
         print('GW2 shared dependency index (cached):', {k: len(v) for k, v in indexes.items()}, flush=True)
         return indexes
     except (OSError, pickle.UnpicklingError, EOFError, AttributeError):
         pass
-    indexes = dependency_index(game)
+    indexes = dependency_index(game, jobs)
+    _DEPENDENCY_MEMORY.clear()
+    _DEPENDENCY_MEMORY[key] = indexes
+    temporary = None
     try:
+        import uuid
         folder.mkdir(parents=True, exist_ok=True)
-        with path.with_suffix('.tmp').open('wb') as stream:
+        temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
+        with temporary.open('wb') as stream:
             pickle.dump(indexes, stream, protocol=pickle.HIGHEST_PROTOCOL)
-        path.with_suffix('.tmp').replace(path)
+        temporary.replace(path)
     except OSError:
         pass  # a cache that cannot be written only costs time
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
     return indexes
 
 
-def complete_dependencies(game, output, inventory):
+def complete_dependencies(game, output, inventory, documents=None, resource_data=None, jobs=None):
     existing = {a.get('guid') for a in inventory['assets'] if 'document' in a}
-    documents = [(a, json.loads((Path(output) / a['document']).read_text()))
-                 for a in inventory['assets'] if 'document' in a]
+    if documents is None:
+        def read_document(asset):
+            return asset, json.loads((Path(output) / asset['document']).read_text())
+        documents = list(ordered_map(read_document, (a for a in inventory['assets'] if 'document' in a), jobs))
     follow = {'WorldPartData', 'ObjectBlueprint', 'SpatialPrefabBlueprint', 'LogicPrefabBlueprint', 'SubWorldData',
               'RigidMeshAsset', 'CompositeMeshAsset', 'SkinnedMeshAsset', 'MeshVariationDatabase', 'TextureAsset',
               'AtlasTextureAsset',
@@ -507,7 +544,7 @@ def complete_dependencies(game, output, inventory):
     if not missing and not any(ref['file'] not in existing for asset, doc in documents
                                if doc['root_type'] in follow for ref in doc['imports']):
         return
-    indexes = cached_dependency_index(game)
+    indexes = cached_dependency_index(game, jobs)
     chunks = {a['guid'] for a in inventory['assets'] if a['kind'] == 'chunk'}
     def obtain(kind, key):
         location = indexes[kind].get(key)
@@ -528,6 +565,8 @@ def complete_dependencies(game, output, inventory):
                 content = content[:12] + struct.pack('<I', 64) + content[16:]
         target.write_bytes(content)
         asset['bytes'] = len(content)
+        if kind == 'resource':
+            cache_resource(resource_data, asset, content)
         inventory['assets'].append(asset)
         return asset, content
     tried = set(existing)
@@ -700,64 +739,120 @@ class Ebx:
                 'imports': self.imports, 'objects': self.objects}
 
 
-def export(game, package, output):
+def skip_asset(reader, size, decoded=False):
+    """Advance without inflating duplicate data; validate every block's range."""
+    if not 0 <= size <= LIMIT:
+        raise ValueError('GW2 asset exceeds output limit')
+    if decoded:
+        if size > len(reader.data) - reader.at:
+            raise ValueError('Truncated decoded GW2 asset')
+        reader.at += size
+        return
+    remaining = size
+    while remaining:
+        if reader.at + 8 > len(reader.data):
+            raise ValueError('Truncated GW2 compression header')
+        decoded_size = struct.unpack_from('>I', reader.data, reader.at)[0] & 0xffffff
+        compression = struct.unpack_from('<H', reader.data, reader.at + 4)[0]
+        packed = struct.unpack_from('>H', reader.data, reader.at + 6)[0] | ((compression >> 8 & 15) << 16)
+        if not decoded_size or decoded_size > remaining or compression & 127 not in (0, 2, 9):
+            raise ValueError('Invalid GW2 compression block')
+        end = reader.at + 8 + (decoded_size if compression & 127 == 0 else packed)
+        if end > len(reader.data):
+            raise ValueError('Truncated GW2 compressed payload')
+        reader.at = end
+        remaining -= decoded_size
+
+
+_RESOURCE_HEADERS = {0x6bde20ba, 0x49b156d4, 0x22fe8ac8, 0x5c4954a6, 0xacd91fe8}
+
+
+def cache_resource(cache, asset, content):
+    if cache is not None and asset.get('resource_type') in _RESOURCE_HEADERS and len(content) <= 4*1024*1024:
+        cache[asset['path']] = content
+
+
+def _export_asset(task):
+    output, asset, bundle_id, raw, start, decoded, lock = task
+    reader = Reader(raw)
+    reader.at = start
+    content = reader.take(asset['original_size']) if decoded else decompress(reader, asset['original_size'])
+    item = dict(asset)
+    if asset['kind'] == 'resource' and asset.get('resource_type') == 0x6bde20ba and len(content) == 132:
+        content = content[:28] + b'\0'*4 + content[28:] + b'\0'*8
+        if struct.unpack_from('<I', content, 12)[0] == 63:
+            item['source_format'] = 63
+            content = content[:12] + struct.pack('<I', 64) + content[16:]
+    name = asset['sha1']
+    item.update(path=f"{asset['kind']}/{name}.bin", bytes=len(content), bundle=bundle_id)
+    document = None
+    if asset['kind'] == 'ebx':
+        try:
+            document = Ebx(content).document()
+            item.update(document=f'ebx/{name}.json', root_type=document['root_type'], guid=document['guid'])
+        except (ValueError, IndexError, struct.error, UnicodeError) as error:
+            item['error'] = str(error)
+    # Distinct anonymous assets can share a payload hash/path. Serialize those
+    # writes, retaining every inventory entry and deterministic source priority.
+    with lock:
+        (output / item['path']).write_bytes(content)
+        if document is not None:
+            (output / item['document']).write_text(json.dumps(document), encoding='utf-8')
+    cached = content if item.get('resource_type') in _RESOURCE_HEADERS and len(content) <= 4*1024*1024 else None
+    return item, document, cached
+
+
+def export(game, package, output, jobs=None, resource_data=None):
     game, output = Path(game), Path(output)
     data_root = (game / 'Data').resolve()
     toc = (data_root / (package + '.toc')).resolve()
     if not toc.is_relative_to(data_root) or not toc.is_file():
         raise ValueError('Invalid GW2 map package')
     output.mkdir(parents=True, exist_ok=True)
+    for kind in ('ebx', 'resource', 'chunk'):
+        (output / kind).mkdir(exist_ok=True)
     inventory = {'profile': 'gw2', 'game': str(game), 'package': package,
                  'assets': [], 'errors': [], 'archive_policy': 'base-and-installed-patch'}
-    seen = set()
-    for source in [game / 'Data/Win32/globals.toc', game / 'Data/Win32/shared_levels.toc', toc]:
-        if not source.is_file():
-            continue
-        toc = source
-        for description, raw, decoded in bundles_with_patches(game, toc):
-            assets, r = bundle(raw)
-            for asset in assets:
-                content = r.take(asset['original_size']) if decoded else decompress(r, asset['original_size'])
-                key = asset_key(asset)
-                if key in seen:
-                    continue
-                seen.add(key)
-                item = dict(asset)
-                if asset['kind'] == 'resource' and asset.get('resource_type') == 0x6bde20ba and len(content) == 132:
-                    # The GW2 v11 header has no padding before its chunk GUID.
-                    # Normalize to the existing decoder's v11 header shape.
-                    content = content[:28] + b'\0' * 4 + content[28:] + b'\0' * 8
-                    if struct.unpack_from('<I', content, 12)[0] == 63:
-                        # GW2 ordinal 63 is BC5 (16-byte blocks), whereas Skate's
-                        # ordinal 63 is BC4. Retain the source ordinal in inventory.
-                        item['source_format'] = 63
-                        content = content[:12] + struct.pack('<I',64) + content[16:]
-                name = asset['sha1']
-                item['path'] = f"{asset['kind']}/{name}.bin"
-                path = output / item['path']
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(content)
-                item['bytes'] = len(content)
-                item['bundle'] = description['id']
-                if asset['kind'] == 'ebx':
-                    try:
-                        document = Ebx(content).document()
-                        item['document'] = f'ebx/{name}.json'
-                        (output / item['document']).write_text(json.dumps(document), encoding='utf-8')
-                        item['root_type'] = document['root_type']
-                        item['guid'] = document['guid']
-                    except (ValueError, IndexError, struct.error, UnicodeError) as error:
-                        item['error'] = str(error)
-                        inventory['errors'].append({'name': asset['name'], 'stage': 'ebx', 'error': str(error)})
-                inventory['assets'].append(item)
-            print('GW2 bundle:', description['id'], 'unique assets:', len(inventory['assets']), flush=True)
-    complete_dependencies(game, output, inventory)
-    complete_texture_chunks(game, output, inventory)
+    seen, locks, documents = set(), {}, []
+    resource_data = resource_data if resource_data is not None else {}
+    workers = worker_count(jobs)
+    print('GW2 archive workers:', workers, flush=True)
+    duplicates = 0
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='frostbite-archive') as pool:
+        for source in [game / 'Data/Win32/globals.toc', game / 'Data/Win32/shared_levels.toc', toc]:
+            if not source.is_file():
+                continue
+            for description, raw, decoded in bundles_with_patches(game, source):
+                assets, reader = bundle(raw)
+                def tasks():
+                    nonlocal duplicates
+                    for asset in assets:
+                        start = reader.at
+                        skip_asset(reader, asset['original_size'], decoded)
+                        key = asset_key(asset)
+                        if key in seen:
+                            duplicates += 1
+                            continue
+                        seen.add(key)
+                        lock = locks.setdefault((asset['kind'], asset['sha1']), threading.Lock())
+                        yield output, asset, description['id'], raw, start, decoded, lock
+                for item, document, content in ordered_map(_export_asset, tasks(), workers, pool):
+                    inventory['assets'].append(item)
+                    if document is not None:
+                        documents.append((item, document))
+                    if content is not None:
+                        cache_resource(resource_data, item, content)
+                    if 'error' in item:
+                        inventory['errors'].append({'name': item['name'], 'stage': 'ebx', 'error': item['error']})
+                print('GW2 bundle:', description['id'], 'unique assets:', len(inventory['assets']), flush=True)
+    print('GW2 duplicate assets skipped without decompression:', duplicates, flush=True)
+    complete_dependencies(game, output, inventory, documents, resource_data, workers)
+    complete_texture_chunks(game, output, inventory, resource_data=resource_data, jobs=workers)
     (output / 'inventory.json').write_text(json.dumps(inventory, indent=2), encoding='utf-8')
     return inventory
 
 
-def complete_texture_chunks(game, output, inventory, terrain_only=False):
+def complete_texture_chunks(game, output, inventory, terrain_only=False, resource_data=None, jobs=None):
     """Replace bundle low-mip data with full chunks from the base streaming SBs."""
     index = {}
     for base in (root / 'Win32' for root in data_roots(game)):
@@ -770,7 +865,7 @@ def complete_texture_chunks(game, output, inventory, terrain_only=False):
         if asset.get('resource_type') == 0x22fe8ac8:
             from gw2_terrain import terrain_tree
             try:
-                tree = terrain_tree((Path(output) / asset['path']).read_bytes())
+                tree = terrain_tree(resource_data[asset['path']] if resource_data is not None and asset['path'] in resource_data else (Path(output) / asset['path']).read_bytes())
             except (ValueError, IndexError, struct.error) as error:
                 # An unreadable terrain tree is reported, not fatal; the rest of the map still imports.
                 inventory['errors'].append({'name': asset['name'], 'stage': 'terrain', 'error': str(error)})
@@ -779,11 +874,11 @@ def complete_texture_chunks(game, output, inventory, terrain_only=False):
         elif terrain_only:
             continue
         elif asset.get('resource_type') == 0x6bde20ba:
-            header = (Path(output) / asset['path']).read_bytes()
+            header = resource_data[asset['path']] if resource_data is not None and asset['path'] in resource_data else (Path(output) / asset['path']).read_bytes()
             if len(header) == 144:
                 wanted.add(header[32:48].hex())
         elif asset.get('resource_type') == 0x49b156d4:
-            mesh = (Path(output) / asset['path']).read_bytes()
+            mesh = resource_data[asset['path']] if resource_data is not None and asset['path'] in resource_data else (Path(output) / asset['path']).read_bytes()
             if len(mesh) >= 128:
                 lod = struct.unpack_from('<Q', mesh, 32)[0]
                 if lod and lod + 112 <= len(mesh):
@@ -823,7 +918,7 @@ def complete_texture_chunks(game, output, inventory, terrain_only=False):
     # streaming superbundles: take them from the dependency index.
     missing = sorted(g for g in wanted - index.keys() if 'bytes' not in chunks.get(g, {}))
     if missing:
-        shared = cached_dependency_index(game)['chunk']
+        shared = cached_dependency_index(game, jobs)['chunk']
         found = 0
         for guid in missing:
             location = shared.get(guid)
@@ -851,9 +946,10 @@ if __name__ == '__main__':
     parser.add_argument('--game', required=True)
     parser.add_argument('--map')
     parser.add_argument('--out')
+    parser.add_argument('--jobs', type=int, help='Archive workers (default: AURA_IMPORT_JOBS or up to 8)')
     args = parser.parse_args()
     if args.map and args.out:
-        result = export(args.game, args.map, args.out)
+        result = export(args.game, args.map, args.out, args.jobs)
         print('GW2 assets:', len(result['assets']), 'EBX errors:', len(result['errors']))
     else:
         print(json.dumps(discover(args.game), indent=2))

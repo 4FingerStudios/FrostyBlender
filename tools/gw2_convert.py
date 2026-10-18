@@ -189,12 +189,14 @@ class Gw2Converter(Converter):
             parameters += [(selected[0], item) for item in selected_material.get('TextureParameters', [])]
         cutoff = .5 if 'alphatest' in graph_name.lower() else -1
         bindings = {}
+        texture_asset_names = {}
         unresolved = []
         for doc, parameter in parameters:
             texture = self.archive.resolve(doc, parameter.get('Value'))
             key = parameter.get('ParameterName', '')
             if texture:
                 bindings[key] = texture[0]['guid']
+                texture_asset_names[key] = texture[1].get('Name', '')
             elif parameter.get('Value', {}).get('$pointer'):
                 unresolved.append(key)
         paths = {}
@@ -204,7 +206,8 @@ class Gw2Converter(Converter):
                             ('mask', ('ASM', 'Mask', 'Specular')),
                             ('emissive', ('Emissive', 'EmissiveColor')),
                             # Read by the add-on's optional game shaders (see materials.py there).
-                            ('asm', ('ASM',)), ('ett', ('ETT',)), ('specular_masks', ('Specular_Masks',))]:
+                            ('asm', ('ASM',)), ('ett', ('ETT',)),
+                            ('specular_masks', ('Specular_Masks', 'SpecularMasks', 'RoughnessSpecTint'))]:
             guid = next((bindings[name] for name in names if name in bindings), None)
             if guid:
                 path = self.texture(guid)
@@ -231,7 +234,7 @@ class Gw2Converter(Converter):
         tint = next((vectors[name] for name in ('Tint_Color', 'Tint_Colour', 'ColorTint')
                      if name in vectors), [1, 1, 1, 1])
         content = {'textures': paths, 'named_textures': named_textures,
-                   'texture_bindings': bindings, 'source_shader': shader,
+                   'texture_bindings': bindings, 'texture_asset_names': texture_asset_names, 'source_shader': shader,
                    'source_shader_variation': variation_shader,
                    'shader_name': graph_name, 'alpha_cutoff': cutoff, 'tint': tint, 'vectors': vectors}
         digest = hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:20]

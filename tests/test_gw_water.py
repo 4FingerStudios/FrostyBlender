@@ -6,9 +6,10 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from gw_water import water_constants, convert_water
+from gw_water import water_constants, convert_water, water_section
 from gw2_convert import Gw2Converter
 
 
@@ -26,6 +27,23 @@ def database():
 
 
 class WaterChecks(unittest.TestCase):
+    def test_surface_follows_volume_top_under_parent_and_nonuniform_scale(self):
+        section = water_section()
+        vertices = np.column_stack((section['positions'], np.ones(4)))
+        # Tilt the up axis, then rotate and translate the parent. A world-Y
+        # offset or a local center plane would both produce wrong results.
+        volume = np.array([[1200, 0, 0, -370], [0, 40, -300, 63],
+                           [0, 15, 800, -560], [0, 0, 0, 1]], dtype=float)
+        parent = np.array([[0, 0, -1, 100], [0, 1, 0, 7],
+                           [1, 0, 0, -200], [0, 0, 0, 1]], dtype=float)
+        world = parent @ volume
+        placed = vertices @ world.T
+        np.testing.assert_allclose(placed.mean(axis=0), world @ [0, .5, 0, 1])
+        np.testing.assert_allclose(placed.mean(axis=0)[:3] - world[:3, 3], world[:3, 1]*.5)
+        for tri in section['indices'].reshape(-1, 3):
+            a, b, c = section['positions'][tri]
+            self.assertGreater(np.cross(b-a, c-a)[1], 0)
+
     def test_native_constants_and_malformed_ranges(self):
         raw = database()
         tables = water_constants(raw)
@@ -59,6 +77,11 @@ class WaterChecks(unittest.TestCase):
             for source in exported['native_shader_databases']:
                 self.assertEqual((assets/source['path']).read_bytes(), native)
             self.assertTrue((assets/mesh).is_file())
+            # Verify the serialized mesh, not just the helper's vertices.
+            raw = (assets/mesh).read_bytes()
+            data = np.frombuffer(raw, '<f4', count=4*12, offset=96).reshape(4, 12)
+            np.testing.assert_allclose(data[:, 1], .5)
+            self.assertEqual(exported['surface_position'], 'volume_top')
             convert_water(converter, doc, water)
             self.assertEqual(converter.counts['triangles'], 2)
 

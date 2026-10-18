@@ -1,7 +1,7 @@
 """GW1's legacy character and prop surfaces translated to Blender's BSDF.
 
 PSA is Phong exponent / specular / ambient occlusion; SSO is smoothness /
-specular / occlusion. Phong and Principled highlights are different models;
+specular / tint mask. Phong and Principled highlights are different models;
 the exponent conversion preserves the lobe width rather than dropping it.
 """
 import bpy
@@ -58,14 +58,34 @@ def build(mat, doc, image):
         nonlocal base
         nodes = [texture(named.get('Q%d_%s' % (i, parameter)), non_color,
                          'Q%d %s' % (i, parameter)) for i in range(1, 5)]
+        if role == 'normal':
+            nodes = [None if placeholder_normal(n) else n for n in nodes]
         if any(nodes):
             if role == 'base':
                 base = next(n for n in nodes if n)
             return quadrant([n.outputs['Color'] if n else default for n in nodes]), None
         node = texture(textures.get(role) or named.get(parameter), non_color, parameter)
+        if role == 'normal' and placeholder_normal(node):
+            node = None
         if role == 'base':
             base = node
         return (node.outputs['Color'], node) if node else (default, None)
+
+    def placeholder_normal(node):
+        if node is None:
+            return False
+        path = textures.get('normal')
+        for parameter, asset_name in doc.get('texture_asset_names', {}).items():
+            bound_path = named.get(parameter) or (path if parameter == 'Normal' else None)
+            if bound_path and asset_name.lower().endswith('/normal_default') and node.image == image(bound_path, True):
+                return True
+        # Old exports omit texture names. GW1 Xenon's normal_default is a
+        # tiny solid-black image, not an RGB tangent normal (.5, .5, 1).
+        # Its decoded XY would point sideways and extinguish diffuse lighting.
+        if node.image.size[0]*node.image.size[1] <= 256:
+            pixels = list(node.image.pixels)
+            return bool(pixels) and all(abs(v) < 1e-6 for i, v in enumerate(pixels) if i % 4 != 3)
+        return False
 
     color, color_node = sample('base', 'Diffuse', rgba('Diffuse'))
     normal, normal_node = sample('normal', 'Normal', (.5, .5, 1, 1), True)
@@ -92,9 +112,11 @@ def build(mat, doc, image):
     psa_path = textures.get('psa')
     psa = texture(psa_path, True, 'PSA (Phong, specular, AO)') if psa_path != textures.get('base') else None
     masks, masks_node = sample('specular_masks', 'SpecularMasks', (1, 1, 1, 1), True)
-    if not masks_node and named.get('Specular_Masks'):
-        masks_node = texture(named['Specular_Masks'], True, 'SSO (smoothness, specular, AO)')
-        masks = masks_node.outputs['Color']
+    mask_alias = next((key for key in ('Specular_Masks', 'RoughnessSpecTint') if named.get(key)), None)
+    if not masks_node and mask_alias:
+        masks_node = texture(named[mask_alias], True, 'SSO (smoothness, specular, tint mask)')
+        if masks_node:
+            masks = masks_node.outputs['Color']
     if psa:
         channels = t.split(psa)
         exponent = t.math('MAXIMUM', t.math('MULTIPLY', channels.outputs['Red'],

@@ -1,7 +1,8 @@
 """Water entity export and lossless native shader sidecars.
 
-The projected/simulated game surface becomes a bounded plane at the entity
-origin. Blender reconstructs an animated surface; native GPU programs and
+The entity transform describes a water volume, centered at its origin. Its
+surface is the upper face (local Y = .5). Blender reconstructs an animated
+surface; native GPU programs and
 simulation settings are retained for inspection, not executed by Blender.
 """
 import hashlib
@@ -14,6 +15,20 @@ import numpy as np
 from convert import write_mesh
 
 SHADER_DATABASE = 0x36F3F2C0
+
+
+def water_section():
+    """Top face of the unit water volume; the entity supplies size/rotation.
+
+    Keep the half-height in local geometry, so parent transforms and rotated
+    or nonuniformly scaled volumes move the surface along the authored up axis.
+    """
+    return {'name': 'Water surface',
+            'positions': np.array([[-.5, .5, -.5], [-.5, .5, .5], [.5, .5, .5], [.5, .5, -.5]], np.float32),
+            'normals': np.tile([0, 1, 0], (4, 1)),
+            'uv': np.array([[0, 0], [0, 1], [1, 1], [1, 0]], np.float32),
+            'indices': np.array([0, 1, 2, 0, 2, 3], np.uint32),
+            'color': np.ones((4, 3)), 'palette': np.zeros(4), 'material_id': 0}
 
 
 def water_constants(data):
@@ -96,7 +111,8 @@ def convert_water(converter, doc, obj):
                'source_shader_document': dict(graph[0]) if graph else None,
                'native_shader_databases': databases, 'water_constant_tables': tables,
                'double_sided': True, 'alpha_cutoff': -1,
-               'surface_approximation': 'Bounded plane at entity origin; animated Blender refraction and normals. '
+               'surface_position': 'volume_top',
+               'surface_approximation': 'Bounded plane on the water volume top face; animated Blender refraction and normals. '
                    'Native projected-grid simulation, shore depth and interactive waves are not executed.',
                'shader_binding_note': 'Constant tables selected by water texture names; '
                    'compiled graph-to-table linkage is not decoded.'}
@@ -128,11 +144,7 @@ def convert_water(converter, doc, obj):
     converter.materials['water:'+digest] = material
     rel = 'meshes/frostbite/water_plane.amsh'
     if not hasattr(converter, '_water_plane'):
-        section = {'name': 'Water surface', 'positions': np.array([[-.5, 0, -.5], [-.5, 0, .5], [.5, 0, .5], [.5, 0, -.5]], np.float32),
-                   'normals': np.tile([0, 1, 0], (4, 1)), 'uv': np.array([[0, 0], [0, 1], [1, 1], [1, 0]], np.float32),
-                   'indices': np.array([0, 1, 2, 0, 2, 3], np.uint32), 'color': np.ones((4, 3)),
-                   'palette': np.zeros(4), 'material_id': 0}
-        vertices, triangles = write_mesh(converter.assets / rel, [section])
+        vertices, triangles = write_mesh(converter.assets / rel, [water_section()])
         converter.counts['vertices'] += vertices
         converter.counts['triangles'] += triangles
         converter._water_plane = rel
