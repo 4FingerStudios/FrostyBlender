@@ -115,6 +115,10 @@ def mesh_sections(archive, resource, skinned=False):
                 raise ValueError('GW2 vertex stream index invalid')
             if usage in (1, 6, 33) or skinned and usage in (2, 3, 4, 5):
                 attrs[usage] = read_attr(geometry, bases[stream], vertices, strides[stream], fmt_attr, attr_offset)
+        if 33 not in attrs:
+            # No texture coordinates: a depth/shadow proxy over the visible sections (Rose's robe had one
+            # that covered it in the corner texel's green).
+            continue
         dtype = '<u2' if fmt == 33 else '<u4' if fmt == 46 else None
         if dtype is None:
             raise ValueError('Unsupported GW2 index format')

@@ -3,9 +3,11 @@
 The group takes the game's textures as they are and does what GW2's GBuffer shaders do with them:
   Normal   X = R * A, Y = G (DirectX green, flipped for Blender), Z rebuilt
   ASM      R ambient occlusion, G smoothness, B metalness
-  ETT      R emissive mask, B tint mask: colour = lerp(Color, Color * Tint, ETT.B)
-  Edge     velvet/fresnel shaders: Edge_Tint * (1 - N.V) ^ Edge_Tint_Exponent, added to colour and emission
-  Detail   greyscale overlay, neutral at 0.5, tiled by Detail_UV_Tiling
+  ETT      R emissive mask, B tint mask: colour = lerp(Color, Color * Tint, ETT.B) (Velvet: ETT.G, repacked)
+  Edge     colour = lerp(Color, Color * Edge_Tint, (1 - N.V) ^ Edge_Tint_Exponent * AO * mask), white = off;
+           Velvet masks it with Detail_Map.R (tiled by Detail_UV_Tiling) and ETT.B
+Citron's peel shader has its own small group in front ("PVZ GW2 Citron"): where Color.A is 0 the flesh shows
+through, roughly Color * Color * ice depth, which turns the pale texture deep orange as in the game.
 Every GW2 material uses the same group, so EEVEE compiles one shader for all of them, and each material's
 values sit on the group node where they can be changed. Specular_Masks shaders (R smoothness, B tint mask)
 are repacked into ASM/ETT outside the group. Prop shaders pick tint and emissive colours by UV quadrant.
@@ -15,7 +17,8 @@ import bpy
 from .materials import placeholder
 
 GROUP = 'PVZ GW2 Generic'
-VERSION = 1
+VERSION = 3
+CITRON = 'PVZ GW2 Citron'
 QUADRANT_TINT = ('TintColour_Q1', 'TintColour_Q2', 'TintColour_Q3', 'TintColour_Q4')
 QUADRANT_EMISSIVE = ('EmissiveColour_Q1', 'EmissiveColour_Q2', 'EmissiveColour_Q3', 'EmissiveColour_Q4')
 
@@ -27,15 +30,16 @@ INPUTS = [
     ('ASM', 'NodeSocketColor', (1, .3, 0, 1)),          # no occlusion, smoothness 0.3, not metal
     ('Normal', 'NodeSocketColor', (.5, .5, 1, 1)),
     ('Normal Alpha', 'NodeSocketFloat', 1.0),
-    ('Edge Tint Colour', 'NodeSocketColor', (0, 0, 0, 1)),
+    ('Edge Tint Colour', 'NodeSocketColor', (1, 1, 1, 1)),
     ('Edge Exponent', 'NodeSocketFloat', 4.0),
-    ('Edge Emission Strength', 'NodeSocketFloat', 0.5),
-    ('Detail Map', 'NodeSocketColor', (.5, .5, .5, 1)),
+    ('Edge Mask', 'NodeSocketFloat', 1.0),
+    ('Edge Emission Strength', 'NodeSocketFloat', 0.0),
+    ('Detail Map', 'NodeSocketColor', (1, 1, 1, 1)),
     ('Detail Strength', 'NodeSocketFloat', 1.0),
     ('Emission Colour', 'NodeSocketColor', (0, 0, 0, 1)),
     ('Emission Strength', 'NodeSocketFloat', 1.0),
     ('Emission Mode', 'NodeSocketInt', 0),              # 0: ETT red masks the emission, 1: whole surface
-    ('Colour AO Strength', 'NodeSocketFloat', 1.0),
+    ('Colour AO Strength', 'NodeSocketFloat', 0.35),     # the game only dims ambient light with AO
     ('Reflection AO Strength', 'NodeSocketFloat', 1.0),
     ('Alpha Cutoff', 'NodeSocketFloat', -1.0),          # below 0: opaque
 ]
@@ -43,7 +47,9 @@ TIPS = {
     'ETT': 'R emissive mask, B tint mask',
     'ASM': 'R ambient occlusion, G smoothness, B metalness',
     'Normal': 'Game normal map: X from R x Normal Alpha, Y from G',
-    'Edge Tint Colour': 'Rim colour at grazing angles (velvet and fresnel shaders)',
+    'Edge Tint Colour': 'Multiplies the colour at grazing angles (game values go above 1). White: no edge tint',
+    'Edge Mask': 'Where the edge tint applies (Velvet: ETT blue)',
+    'Detail Map': 'Velvet detail: red channel masks the edge tint',
     'Emission Mode': '0: ETT red masks the emission. 1: the whole surface glows',
     'Alpha Cutoff': 'Alpha test threshold. Below 0 the surface is opaque',
 }
@@ -95,6 +101,8 @@ class _Builder:
 
     def split(self, colour, x=0):
         n = self.new('ShaderNodeSeparateColor', x)
+        if isinstance(colour, bpy.types.Node):  # an image texture node
+            colour = colour.outputs['Color']
         self.set(n.inputs['Color'], colour)
         return n.outputs
 
@@ -119,13 +127,9 @@ def group():
     gi = t.new('NodeGroupInput', -1600).outputs
     ett, asm = t.split(gi['ETT'], -1400), t.split(gi['ASM'], -1400)
 
-    # Colour: tint where ETT.B says so, detail overlay, then ambient occlusion.
-    colour = t.mix(gi['Base Colour'], t.mix(gi['Base Colour'], gi['Tint Colour'], 1.0, 'MULTIPLY', -1200),
-                   ett['Blue'], x=-1000)
-    detail = t.mix((1, 1, 1, 1), t.vec('SCALE', gi['Detail Map'], 2.0, -1200), gi['Detail Strength'], x=-1000)
-    colour = t.mix(colour, detail, 1.0, 'MULTIPLY', -800)
+    # Colour: edge tint (below), tint where ETT.B says so, then ambient occlusion.
+    colour = gi['Base Colour']
     ao = t.math('MULTIPLY_ADD', t.math('SUBTRACT', asm['Red'], 1.0, x=-1200), gi['Colour AO Strength'], 1.0, x=-1000)
-    colour = t.mix(colour, ao, 1.0, 'MULTIPLY', -600)
     reflection_ao = t.math('MULTIPLY_ADD', t.math('SUBTRACT', asm['Red'], 1.0, x=-1200),
                            gi['Reflection AO Strength'], 1.0, x=-1000)
 
@@ -145,12 +149,18 @@ def group():
     t.set(normal_map.inputs['Color'], packed.outputs[0])
     normal = normal_map.outputs['Normal']
 
-    # Edge tint: brightest where the surface turns away from the camera.
+    # Edge tint: the colour times Edge Tint, strongest where the surface turns away from the camera.
     geometry = t.new('ShaderNodeNewGeometry', -400)
     facing = t.math('SUBTRACT', 1.0, t.vec('DOT_PRODUCT', normal, geometry.outputs['Incoming'], -100), x=0, clamp=True)
     rim = t.math('POWER', facing, gi['Edge Exponent'], x=100)
-    edge = t.mix((0, 0, 0, 1), t.mix(colour, gi['Edge Tint Colour'], 1.0, 'MULTIPLY', 100), rim, x=200)
-    colour = t.mix(colour, edge, 1.0, 'ADD', 300, clamp=True)
+    detail = t.math('MULTIPLY_ADD', t.math('SUBTRACT', t.split(gi['Detail Map'], -1400)['Red'], 1.0, x=-1200),
+                    gi['Detail Strength'], 1.0, x=-1000)
+    amount = t.math('MULTIPLY', t.math('MULTIPLY', rim, asm['Red'], x=150), t.math('MULTIPLY', gi['Edge Mask'], detail, x=150), x=200)
+    plain = colour
+    colour = t.mix(colour, t.mix(colour, gi['Edge Tint Colour'], 1.0, 'MULTIPLY', 200), amount, x=250, clamp=True)
+    edge = t.mix(colour, plain, 1.0, 'SUBTRACT', 300, clamp=True)
+    colour = t.mix(colour, t.mix(colour, gi['Tint Colour'], 1.0, 'MULTIPLY', 300), ett['Blue'], x=350)
+    colour = t.mix(colour, ao, 1.0, 'MULTIPLY', 400)
 
     # Emission: ETT red masks the emissive colour (mode 0) or the whole surface glows (mode 1).
     mask = t.math('MAXIMUM', ett['Red'], t.math('MINIMUM', gi['Emission Mode'], 1.0, x=-1200), x=-1000)
@@ -172,6 +182,54 @@ def group():
     go = t.new('NodeGroupOutput', 900).inputs
     t.set(go['Shader'], bsdf.outputs['BSDF'])
     t.set(go['Edge Tint Preview'], edge)
+    return tree
+
+
+CITRON_INPUTS = [
+    ('Color', 'NodeSocketColor', (1, 1, 1, 1)),
+    ('Peel Mask', 'NodeSocketFloat', 1.0),           # Color alpha: 1 peel, 0 see-through flesh
+    ('Pulp', 'NodeSocketFloat', 0.25),               # Material2_Color alpha
+    ('AO', 'NodeSocketFloat', 1.0),
+    ('Edge Tint', 'NodeSocketColor', (1, 1, 1, 1)),
+    ('Edge Exponent', 'NodeSocketFloat', 6.0),
+    ('Parallax Tint', 'NodeSocketColor', (0, 0, 0, 1)),
+    ('Ice Depth Exponent', 'NodeSocketFloat', 0.0),
+    ('Ice Depth Min', 'NodeSocketFloat', 0.2),
+    ('Ice Depth 2 Exponent', 'NodeSocketFloat', 1.0),
+    ('Ice Depth 2 Min', 'NodeSocketFloat', 0.13),
+]
+
+
+def citron_group():
+    """PBR_Character_Main_Citron's colour, read from its GBuffer shader (parallax offset left out):
+      inner  = lerp(Parallax_Tint * pulp, lerp(C, max(pulp, C), pulp), pulp)
+      edged  = lerp(C, C * Edge_Tint, f ^ Edge_Tint_Exponent * AO)          f = 1 - N.V
+      colour = lerp(edged * inner * (f ^ Ice_Depth_Exponent + Ice_Depth_min), C, C.a) + (f ^ Ice_Depth2 + Ice_Depth2_min) * C
+    """
+    found = bpy.data.node_groups.get(CITRON)
+    if found and found.get('frostbite_version') == VERSION:
+        return found
+    tree = bpy.data.node_groups.new(CITRON, 'ShaderNodeTree')
+    tree['frostbite_version'] = VERSION
+    for name, kind, default in CITRON_INPUTS:
+        tree.interface.new_socket(name, in_out='INPUT', socket_type=kind).default_value = default
+    tree.interface.new_socket('Colour', in_out='OUTPUT', socket_type='NodeSocketColor')
+    t = _Builder(tree)
+    gi = t.new('NodeGroupInput', -1200).outputs
+    c, pulp = gi['Color'], gi['Pulp']
+    geometry = t.new('ShaderNodeNewGeometry', -1200)
+    f = t.math('SUBTRACT', 1.0, t.vec('DOT_PRODUCT', geometry.outputs['Normal'], geometry.outputs['Incoming'], -1000),
+               x=-900, clamp=True)
+    raised = t.mix(c, t.mix(c, pulp, 1.0, 'LIGHTEN', -800), pulp, x=-700)
+    inner = t.mix(t.mix(gi['Parallax Tint'], pulp, 1.0, 'MULTIPLY', -800), raised, pulp, x=-600)
+    rim = t.math('MULTIPLY', t.math('POWER', f, gi['Edge Exponent'], x=-800), gi['AO'], x=-700)
+    edged = t.mix(c, t.mix(c, gi['Edge Tint'], 1.0, 'MULTIPLY', -700), rim, x=-600)
+    ice = t.math('ADD', t.math('POWER', f, gi['Ice Depth Exponent'], x=-800), gi['Ice Depth Min'], x=-700)
+    flesh = t.mix(t.mix(edged, inner, 1.0, 'MULTIPLY', -500), ice, 1.0, 'MULTIPLY', -400)
+    colour = t.mix(flesh, c, gi['Peel Mask'], x=-300)
+    ice2 = t.math('ADD', t.math('POWER', f, gi['Ice Depth 2 Exponent'], x=-800), gi['Ice Depth 2 Min'], x=-700)
+    colour = t.mix(colour, t.mix(c, ice2, 1.0, 'MULTIPLY', -400), 1.0, 'ADD', -200, clamp=True)
+    t.set(t.new('NodeGroupOutput', 0).inputs['Colour'], colour)
     return tree
 
 
@@ -197,8 +255,10 @@ def build(mat, doc, image):
     tile.inputs[2].default_value = (tiling[2], 1 - tiling[1] - tiling[3], 0)
     t.set(tile.inputs[0], uvmap.outputs['UV'])
 
+    named = doc.get('named_textures', {}) or {}
+
     def texture(role, non_color, label, coords=None):
-        path = textures.get(role)
+        path = textures.get(role) or named.get(role)
         img = image(path, non_color) if path else None
         if img is None:
             return None
@@ -241,7 +301,17 @@ def build(mat, doc, image):
     else:
         surface = params[1]
         gin['ASM'].default_value = (1.0, 1.0 - float(surface[0]), float(surface[1]), 1.0)
-    if ett:
+    velvet = 'Edge_Tint2' in vectors
+    if ett and velvet:
+        # Velvet: tint mask in ETT.G and the edge tint masked by ETT.B.
+        et = t.split(ett, -600)
+        packed = t.new('ShaderNodeCombineColor', -400, label='ETT for Velvet')
+        t.set(packed.inputs['Red'], et['Red'])
+        t.set(packed.inputs['Green'], et['Green'])
+        t.set(packed.inputs['Blue'], et['Green'])
+        t.set(gin['ETT'], packed.outputs['Color'])
+        t.set(gin['Edge Mask'], et['Blue'])
+    elif ett:
         t.set(gin['ETT'], ett.outputs['Color'])
 
     def by_quadrant(names, singles, default):
@@ -261,11 +331,43 @@ def build(mat, doc, image):
     t.set(gin['Emission Colour'], emissive)
 
     edge = vectors.get('Edge_Tint') or vectors.get('Edge_Tint2')
-    if edge:
-        # The game stores the rim in HDR (values like 25 or 43); the hue goes on the node, scaled to 0..1.
-        peak = max(max(edge[:3]), 1.0)
-        gin['Edge Tint Colour'].default_value = (edge[0] / peak, edge[1] / peak, edge[2] / peak, 1.0)
-        exponent = vectors.get('Edge_Tint_Exponent') or vectors.get('Edge_Tint_Exponent2')
+    exponent = vectors.get('Edge_Tint_Exponent') or vectors.get('Edge_Tint_Exponent2')
+    citron = 'Ice_Depth2_min' in vectors or doc.get('shader_name', '').endswith('_Citron')
+    if citron and base:
+        # The peel's see-through flesh is worked out in front of the main group; its edge tint goes there too.
+        ice = t.new('ShaderNodeGroup', -450, label='Citron peel and flesh')
+        ice.node_tree = citron_group()
+        ice.width = 220
+        t.set(ice.inputs['Color'], base.outputs['Color'])
+        t.set(ice.inputs['Peel Mask'], base.outputs['Alpha'])
+        if asm:
+            t.set(ice.inputs['AO'], t.split(asm, -600)['Red'])
+        scale = (vectors.get('Parallax_UV_Scale') or [1.0])[0] or 1.0
+        pulp = texture('Material2_Color', False, 'Material2_Color (pulp in alpha)',
+                       t.vec('SCALE', tile.outputs['Vector'], scale, -1000))
+        if pulp:
+            t.set(ice.inputs['Pulp'], pulp.outputs['Alpha'])
+        if edge:
+            ice.inputs['Edge Tint'].default_value = (*edge[:3], 1.0)
+        if exponent:
+            ice.inputs['Edge Exponent'].default_value = exponent[0]
+        for socket, name in (('Parallax Tint', 'Parallax_Tint'), ('Ice Depth Exponent', 'Ice_Depth_Exponent'),
+                             ('Ice Depth Min', 'Ice_Depth_min'), ('Ice Depth 2 Exponent', 'Ice_Depth2'),
+                             ('Ice Depth 2 Min', 'Ice_Depth2_min')):
+            if name in vectors:
+                v = vectors[name]
+                ice.inputs[socket].default_value = (*v[:3], 1.0) if socket == 'Parallax Tint' else v[0]
+        # This shader samples with mirror addressing: most of the head's UVs sit in the (-1, -1) tile, and
+        # repeating there instead turns the peel segments sideways and loses the face.
+        for n in t.nodes:
+            if n.type == 'TEX_IMAGE':
+                n.extension = 'MIRROR'
+        t.set(gin['Base Colour'], ice.outputs['Colour'])
+        gin['Alpha'].default_value = 1.0
+        t.links.remove(gin['Alpha'].links[0])
+    elif edge:
+        # Game values, above 1 (4.9, 25, 43): the colour is multiplied by this much at the edges.
+        gin['Edge Tint Colour'].default_value = (*edge[:3], 1.0)
         if exponent:
             gin['Edge Exponent'].default_value = exponent[0]
 
