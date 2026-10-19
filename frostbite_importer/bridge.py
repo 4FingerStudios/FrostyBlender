@@ -186,7 +186,11 @@ def run_import(args):
     progress, run = steps(job)
 
     tools, game = args.tools, args.game
-    mapname = args.package.rstrip('/').split('/')[-1]
+    # 'Level_X@1-night': one map of a level file and its time of day (tools/variants.py).
+    package, _, variant = args.package.partition('@')
+    if variant and not re.fullmatch(r'[0-9a-z-]+', variant):
+        raise ValueError('Invalid map variant')
+    mapname = package.rstrip('/').split('/')[-1]
     if not re.fullmatch(r'[A-Za-z0-9_-]+', mapname):
         raise ValueError('Invalid map package name')
     exported, textures, assets, scene = job / 'export', job / 'textures', job / 'assets', job / 'scene.json'
@@ -200,10 +204,10 @@ def run_import(args):
             raise ValueError('Battle for Neighborville needs its initfs key (add-on preferences)')
         if not args.bfn_types or not args.bfn_types.is_file():
             raise ValueError('Battle for Neighborville needs its type name table (add-on preferences)')
-        run([sys.executable, tools / 'bfn.py', '--game', game, '--map', args.package, '--out', exported,
+        run([sys.executable, tools / 'bfn.py', '--game', game, '--map', package, '--out', exported,
              '--names', args.bfn_types], 'Reading archives', 1)
     elif gw2:
-        run([sys.executable, tools / ('gw1.py' if gw1 else 'gw2.py'), '--game', game, '--map', args.package,
+        run([sys.executable, tools / ('gw1.py' if gw1 else 'gw2.py'), '--game', game, '--map', package,
              '--out', exported], 'Reading archives', 1)
     else:
         run([args.reader, game, args.mod, exported], 'Reading archives', 1)
@@ -211,11 +215,14 @@ def run_import(args):
     run([args.reader, '--textures', exported, textures], 'Decoding textures', 2, (0, 3), env)
     if bfn:
         run([sys.executable, tools / 'convert_legacy.py', '--export', exported, '--textures', textures,
-             '--assets', assets, '--out', scene, '--level', args.package], 'Converting geometry', 3)
+             '--assets', assets, '--out', scene, '--level', package], 'Converting geometry', 3)
     else:
         converter = 'gw2_convert.py' if gw2 else 'convert.py'
-        run([sys.executable, tools / converter, '--export', exported, '--textures', textures,
-             '--assets', assets, '--out', scene, '--map', mapname], 'Converting geometry', 3, (0, 1))
+        command = [sys.executable, tools / converter, '--export', exported, '--textures', textures,
+                   '--assets', assets, '--out', scene, '--map', mapname]
+        if variant and gw2:
+            command += ['--variant', variant]
+        run(command, 'Converting geometry', 3, (0, 1))
     report = json.loads(scene.with_suffix('.report.json').read_text(encoding='utf-8'))
     if not args.keep:
         shutil.rmtree(exported, ignore_errors=True)

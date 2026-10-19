@@ -387,7 +387,8 @@ class Gw2Converter(Converter):
             raise ValueError('GW2 editor spawn has no generated collision floor')
         return max(heights)
 
-    def scene(self, map_name):
+    def scene(self, map_name, choice=''):
+        """choice picks one map of a level and its time of day ('1', 'night', '1-night'; see variants.py)."""
         gw1 = getattr(self.archive, 'inventory', {}).get('profile') == 'gw1'
         places = []
         starts = []
@@ -568,9 +569,18 @@ class Gw2Converter(Converter):
             else:
                 self.skipped[kind] = self.skipped.get(kind, 0) + 1
         layers = sorted(self.archive.documents.items(), key=lambda item:item[1][0].get('root_type') != 'SubWorldData')
+        import variants
+        keep = variants.included_subworlds(self.archive.documents, choice)
+        worlds = {name.lower() for name, (asset, doc) in self.archive.documents.items()
+                  if asset.get('root_type') in ('LevelData', 'SubWorldData')}
         for name, (asset, doc) in layers:
             if asset.get('root_type') not in ('WorldPartData','SubWorldData') or map_name.lower() not in name.lower():
                 continue
+            if keep is not None:
+                # Another map of this level, or the other time of day: leave it out.
+                world = name.lower() if asset.get('root_type') == 'SubWorldData' else name.lower().rpartition('/')[0]
+                if world in worlds and world not in keep:
+                    continue
             if asset.get('root_type') == 'WorldPartData' and any(identity[0]==doc['guid'] for identity in visited_layers):
                 continue
             roots += 1
@@ -621,10 +631,11 @@ def main():
     parser = argparse.ArgumentParser()
     for name in ('export', 'textures', 'assets', 'out', 'map'):
         parser.add_argument('--' + name, required=True)
+    parser.add_argument('--variant', default='', help="one map of the level and its time of day: '1', 'night', '1-night'")
     args = parser.parse_args()
     converter = Gw2Converter(Gw2Archive(args.export), args.textures, args.assets)
     try:
-        scene, report = converter.scene(args.map)
+        scene, report = converter.scene(args.map, args.variant)
     finally:
         converter.finish_textures()
     out = Path(args.out)

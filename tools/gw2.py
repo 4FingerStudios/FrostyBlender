@@ -132,8 +132,8 @@ def discover(game):
                 'name': _title(game, toc.stem) or titles.get(toc.stem, toc.stem.replace('level_', '').replace('_', ' ').title()),
                 'package': package, 'mod': str(game), 'profile': 'gw2', 'level': toc.stem,
             }
-    import loc
-    return sorted(loc.name_maps(list(maps.values())), key=lambda item: item['name'])
+    import variants
+    return sorted(variants.expand(game, list(maps.values())), key=lambda item: item['name'])
 
 
 def _title(game, stem):

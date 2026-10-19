@@ -172,7 +172,7 @@ def portrait(names, kind, character_id, character_name=''):
 def map_candidates(names, kind, package, map_name=''):
     """Loading-screen textures for a map, best first: the place must match; mode words, real
     loading screens and lower image numbers (_i1 before _i3) rank higher."""
-    leaf = (package or '').rstrip('/').rsplit('/', 1)[-1].lower()
+    leaf = (package or '').partition('@')[0].rstrip('/').rsplit('/', 1)[-1].lower()  # '@1-night': variants.py
     tokens = [t for t in re.split(r'[^a-z0-9]+', leaf) if t and not t.isdigit()]
     places = [t for t in tokens if t not in MAP_MODES]
     modes = [t for t in tokens if t in MAP_MODES]

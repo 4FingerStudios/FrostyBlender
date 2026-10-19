@@ -43,8 +43,8 @@ def discover(game):
             title = gw2._title(game, toc.stem) or ' '.join(w.capitalize() for w in re.sub(r'^level_', '', leaf).split('_'))
             maps[package.lower()] = {'name': title, 'package': package,
                                      'mod': str(game), 'profile': 'gw1', 'level': toc.stem}
-    import loc
-    return sorted(loc.name_maps(list(maps.values())), key=lambda item: item['name'])
+    import variants
+    return sorted(variants.expand(game, list(maps.values())), key=lambda item: item['name'])
 
 
 def texture_header(header, chunk_size):
