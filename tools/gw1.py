@@ -40,10 +40,11 @@ def discover(game):
             if 'frontend' in leaf or not gw2.read_db(toc).get('bundles'):
                 continue
             package = toc.relative_to(data).with_suffix('').as_posix()
-            title = ' '.join(w.capitalize() for w in re.sub(r'^level_', '', leaf).split('_'))
+            title = gw2._title(game, toc.stem) or ' '.join(w.capitalize() for w in re.sub(r'^level_', '', leaf).split('_'))
             maps[package.lower()] = {'name': title, 'package': package,
-                                     'mod': str(game), 'profile': 'gw1'}
-    return sorted(maps.values(), key=lambda item: item['name'])
+                                     'mod': str(game), 'profile': 'gw1', 'level': toc.stem}
+    import loc
+    return sorted(loc.name_maps(list(maps.values())), key=lambda item: item['name'])
 
 
 def texture_header(header, chunk_size):

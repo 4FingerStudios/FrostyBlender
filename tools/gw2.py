@@ -126,12 +126,24 @@ def discover(game):
             if not doc.get('bundles'):
                 continue
             package = toc.relative_to(data).with_suffix('').as_posix()
-            titles={'level_fe_hub':'Backyard Battleground','level_hub_gnomeunderworld':'Gnome Underworld'}
+            titles={'level_fe_hub':'Backyard Battleground','level_hub_gnomeunderworld':'Gnome Underworld',
+                    'level_hub_tacobandits':'Taco Bandits Hub'}
             maps[package.lower()] = {
-                'name': titles.get(toc.stem, toc.stem.replace('level_', '').replace('_', ' ').title()),
-                'package': package, 'mod': str(game), 'profile': 'gw2',
+                'name': _title(game, toc.stem) or titles.get(toc.stem, toc.stem.replace('level_', '').replace('_', ' ').title()),
+                'package': package, 'mod': str(game), 'profile': 'gw2', 'level': toc.stem,
             }
-    return sorted(maps.values(), key=lambda item: item['name'])
+    import loc
+    return sorted(loc.name_maps(list(maps.values())), key=lambda item: item['name'])
+
+
+def _title(game, stem):
+    """The level's name in the game's own English text, or None (an unreadable string table never stops
+    the list)."""
+    try:
+        import loc
+        return loc.level_title(game, stem)
+    except Exception:  # noqa: BLE001 - names are a nicety
+        return None
 
 
 def guid_big(data):
