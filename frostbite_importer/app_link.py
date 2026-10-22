@@ -253,8 +253,6 @@ def _run(request):
                     prop.selected = True
                 return _press(bpy.ops.frostbite.props_import)
         if kind == 'effects':
-            if game == 'BFN':
-                return 'Effects are available for Garden Warfare 1 and 2'
             state = scene.frostbite_effects
             state.source = game
             group = dict(request['group'], effects=request['items'])

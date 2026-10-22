@@ -74,7 +74,7 @@ def steps(job):
 def cosmetics_discover(args):
     sys.path.insert(0, str(args.tools))
     import cosmetics
-    write_json(args.out, dict(cosmetics.discover(args.game), ok=True))
+    write_json(args.out, dict(cosmetics.discover(args.game, extras=True), ok=True))  # with tattoos and emotes
 
 
 def props_discover(args):
@@ -106,6 +106,14 @@ def explorer(args):
         result = tool.inspect(args.game, args.name, args.reader)
     elif args.action == 'explorer-meshes':
         result = {'variation_dbs': tool.mesh_tables(args.game, json.loads(args.items.read_text(encoding='utf-8')))}
+    elif args.action == 'explorer-sounds':
+        result = tool.sounds(args.game)
+    elif args.action == 'explorer-sound-export':
+        result = tool.export_sounds(args.game, json.loads(args.items.read_text(encoding='utf-8')), args.dest)
+    elif args.action == 'explorer-text':
+        result = tool.text(args.game, args.language)
+    elif args.action == 'explorer-text-export':
+        result = tool.export_text(args.game, args.dest)
     else:
         items = json.loads(args.items.read_text(encoding='utf-8'))
         result = tool.export(args.game, items, args.reader, args.dest, args.texture_size)
@@ -161,7 +169,7 @@ def cosmetics_import(args, tool='cosmetics.py'):
     tools, game = args.tools, args.game
     exported, textures, assets, scene = job / 'export', job / 'textures', job / 'assets', job / 'scene.json'
     command = [sys.executable, tools / tool, 'export', '--game', game, '--items', args.items, '--out', exported]
-    if (game / 'PVZBattleforNeighborville.exe').is_file() and tool != 'effects.py':
+    if (game / 'PVZBattleforNeighborville.exe').is_file():
         if not os.environ.get('AURA_BFN_KEY'):
             raise ValueError('Battle for Neighborville needs its initfs key (add-on preferences)')
         if not args.bfn_types or not args.bfn_types.is_file():
@@ -178,7 +186,7 @@ def cosmetics_import(args, tool='cosmetics.py'):
         shutil.rmtree(textures, ignore_errors=True)
     progress('Import complete', 3)
     return {'ok': True, 'scene': str(scene), 'assets': str(assets), 'errors': len(report.get('errors', [])),
-            'meshes': report.get('meshes'), 'effects': report.get('effects')}
+            'meshes': report.get('meshes'), 'effects': report.get('effects'), 'clips': report.get('clips', [])}
 
 
 def run_import(args):
@@ -214,8 +222,11 @@ def run_import(args):
     env = dict(os.environ, AURA_IMPORT_TEXTURE_SIZE=str(args.texture_size))
     run([args.reader, '--textures', exported, textures], 'Decoding textures', 2, (0, 3), env)
     if bfn:
-        run([sys.executable, tools / 'convert_legacy.py', '--export', exported, '--textures', textures,
-             '--assets', assets, '--out', scene, '--level', package], 'Converting geometry', 3)
+        command = [sys.executable, tools / 'convert_legacy.py', '--export', exported, '--textures', textures,
+                   '--assets', assets, '--out', scene, '--level', package]
+        if variant:
+            command += ['--variant', variant]
+        run(command, 'Converting geometry', 3)
     else:
         converter = 'gw2_convert.py' if gw2 else 'convert.py'
         command = [sys.executable, tools / converter, '--export', exported, '--textures', textures,
@@ -237,7 +248,8 @@ def main():
     p.add_argument('action', choices=('discover', 'import', 'cosmetics-discover', 'cosmetics-import',
                                       'props-discover', 'props-import', 'animations-discover', 'animations-import',
                                       'npcs-discover', 'npcs-import', 'icons', 'effects-discover', 'effects-import',
-                                      'explorer-list', 'explorer-inspect', 'explorer-export', 'explorer-meshes'))
+                                      'explorer-list', 'explorer-inspect', 'explorer-export', 'explorer-meshes',
+                                      'explorer-sounds', 'explorer-sound-export', 'explorer-text', 'explorer-text-export'))
     p.add_argument('--tools', type=Path, required=True)
     p.add_argument('--game', type=Path, required=True)
     p.add_argument('--out', type=Path)
@@ -252,13 +264,15 @@ def main():
     p.add_argument('--icons-dir', type=Path, help='icons: folder for the PNGs')
     p.add_argument('--name', help='explorer-inspect: the file to look at')
     p.add_argument('--dest', type=Path, help='explorer-export: the folder to save into')
+    p.add_argument('--language', help='explorer-text: the language to list (default English)')
     args = p.parse_args()
     if args.action.endswith('discover') or args.action == 'icons' or args.action.startswith('explorer-'):
         try:
             {'discover': discover, 'cosmetics-discover': cosmetics_discover, 'props-discover': props_discover,
              'animations-discover': animations_discover, 'npcs-discover': npcs_discover, 'icons': icons,
              'effects-discover': effects_discover, 'explorer-list': explorer, 'explorer-inspect': explorer,
-             'explorer-export': explorer, 'explorer-meshes': explorer}[args.action](args)
+             'explorer-export': explorer, 'explorer-meshes': explorer, 'explorer-sounds': explorer,
+             'explorer-sound-export': explorer, 'explorer-text': explorer, 'explorer-text-export': explorer}[args.action](args)
         except Exception as error:
             write_json(args.out, {'ok': False, 'error': str(error)})
             return 1

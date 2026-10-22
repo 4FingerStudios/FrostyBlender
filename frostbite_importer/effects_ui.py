@@ -14,9 +14,9 @@ import bpy
 from bpy.props import BoolProperty, CollectionProperty, EnumProperty, IntProperty, StringProperty
 from mathutils import Vector
 
-from . import BRIDGE, GAMES, _check_paths, _redraw, _wrap, draw_credits, prefs, scene_import
+from . import BRIDGE, GAMES, _check_bfn, _check_paths, _redraw, _wrap, draw_credits, prefs, scene_import
 
-SOURCES = {'GW1': 'gw1_path', 'GW2': 'gw2_path'}
+SOURCES = {'GW1': 'gw1_path', 'GW2': 'gw2_path', 'BFN': 'bfn_path'}
 _data = {}    # game folder -> discover result
 _job = {}     # the running effects import
 
@@ -62,7 +62,7 @@ def _reset(state, context):
 
 class FrostbiteEffectsState(bpy.types.PropertyGroup):
     source: EnumProperty(name='Game', default='GW2', update=_reset, items=[
-        ('GW1', 'GW1', 'Garden Warfare 1'), ('GW2', 'GW2', 'Garden Warfare 2')])
+        ('GW1', 'GW1', 'Garden Warfare 1'), ('GW2', 'GW2', 'Garden Warfare 2'), ('BFN', 'BFN', 'Battle for Neighborville')])
     groups: CollectionProperty(type=FrostbiteEffectGroup)
     group_index: IntProperty(update=_fill_effects)
     effects: CollectionProperty(type=FrostbiteEffect)
@@ -181,6 +181,9 @@ class FROSTBITE_OT_effects_import(bpy.types.Operator):
         p, state = prefs(context), context.scene.frostbite_effects
         if not _check_paths(self, p, True):
             return {'CANCELLED'}
+        bfn = state.source == 'BFN'
+        if bfn and not _check_bfn(self, p):
+            return {'CANCELLED'}
         chosen = [i for i in state.effects if i.selected]
         if not chosen and 0 <= state.effect_index < len(state.effects):
             chosen = [state.effects[state.effect_index]]
@@ -196,9 +199,13 @@ class FROSTBITE_OT_effects_import(bpy.types.Operator):
                    '--reader', bpy.path.abspath(p.reader), '--game', bpy.path.abspath(_game(context)),
                    '--items', str(job / 'items.json'), '--job', str(job),
                    '--texture-size', context.scene.frostbite.texture_size]
+        env = None
+        if bfn:  # the initfs key travels in the environment, not on the command line
+            command += ['--bfn-types', bpy.path.abspath(p.bfn_types)]
+            env = dict(os.environ, AURA_BFN_KEY=''.join(p.bfn_key.split()))
         cursor = context.scene.cursor.location.copy() if state.at_cursor else Vector()
         label = chosen[0].name if len(chosen) == 1 else '%s effects' % state.source
-        _job.update(proc=subprocess.Popen(command, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)),
+        _job.update(proc=subprocess.Popen(command, env=env, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)),
                     dir=job, start=time.time(), label=label, cursor=cursor)
         state.status = 'Starting...'
         bpy.app.timers.register(_poll, first_interval=1.0)

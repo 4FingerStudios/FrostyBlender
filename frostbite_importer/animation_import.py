@@ -4,6 +4,9 @@ A clip gives, per frame, parent-local bone transforms in Frostbite space: rotati
 translation and scale. Bones it leaves out keep their rest pose. Each frame is composed down the
 hierarchy in Frostbite space, moved to armature space with the same axis conversions the rig
 was built with, and stored as pose keys of one Action.
+
+A facial clip (face_only) keys just the face bones. On a character already playing a body clip, its
+keys are also written into that body Action, looping, so face and body play together.
 """
 import json
 from pathlib import Path
@@ -52,16 +55,21 @@ def apply_clip(context, armature, clip, set_fps=True):
     if not matched:
         raise ValueError('None of the clip\'s bones are on %s; import the matching character first' % armature.name)
     additive = clip.get('additive')
+    # A facial clip keys only the face bones it drives, so it can play over a body clip.
+    face_only = bool(clip.get('face_only'))
+    keyed = [b for b in bones if b.name in matched] if face_only else bones
 
-    action = bpy.data.actions.new(clip.get('name') or 'Frostbite clip')
     armature.animation_data_create()
+    body = armature.animation_data.action if face_only else None
+    action = bpy.data.actions.new(clip.get('name') or 'Frostbite clip')
     armature.animation_data.action = action
     for b in bones:
         armature.pose.bones[b.name].rotation_mode = 'QUATERNION'
     scene = context.scene
     fps = float(clip.get('fps') or 30.0)
-    if set_fps:
+    if set_fps and body is None:
         scene.render.fps, scene.render.fps_base = max(1, round(fps)), 1.0
+    poses = []
     for index, frame in enumerate(frames):
         pose = {by_lower[k.lower()]: v for k, v in frame.items() if k.lower() in by_lower}
         world = {}
@@ -80,7 +88,8 @@ def apply_clip(context, armature, clip, set_fps=True):
                 s = Vector(channels['s'])
             local = Matrix.Translation(t) @ q.to_matrix().to_4x4() @ Matrix.Diagonal(s.to_4d())
             world[b.name] = world[b.parent.name] @ local if b.parent else local
-        for b in bones:
+        pose = {}
+        for b in keyed:
             target = AXIS4 @ world[b.name] @ BONE_AXES
             if b.parent:
                 parent_target = AXIS4 @ world[b.parent.name] @ BONE_AXES
@@ -88,19 +97,53 @@ def apply_clip(context, armature, clip, set_fps=True):
             else:
                 basis = rest[b.name].inverted() @ target
             pb = armature.pose.bones[b.name]
-            loc, rot, scl = basis.decompose()
+            pose[b.name] = loc, rot, scl = basis.decompose()
             pb.location, pb.rotation_quaternion, pb.scale = loc, rot, scl
             for path in ('location', 'rotation_quaternion', 'scale'):
                 pb.keyframe_insert(path, frame=index + 1)
-    scene.frame_start, scene.frame_end = 1, max(1, len(frames))
+        poses.append(pose)
     action['frostbite_clip'] = clip.get('name', '')
     action['frostbite_fps'] = fps
+    action['frostbite_face'] = int(face_only)
+    if body is not None:
+        # The character already plays a body clip: the face keys go into it too, looping over its length.
+        action.use_fake_user = True  # kept on its own as well, for the NLA
+        armature.animation_data.action = body
+        _merge_face(armature, body, poses)
+        action = body
+    else:
+        scene.frame_start, scene.frame_end = 1, max(1, len(frames))
     if armature.get('frostbite_control_rig'):
         # A pro-rigged character: the clip goes onto the controls too, so they move with it and drive the body
         # (identical result), ready to adjust. The game bones keep their keys for Bake to game skeleton.
         from . import rig_tools
         rig_tools.controls_from_animation(armature)
     return action, len(matched)
+
+
+def _merge_face(armature, action, poses):
+    """Replace the face bones' keys in `action` with `poses` (one {bone: (loc, rot, scale)} per frame), cycling."""
+    from . import rig_tools
+    paths = {'pose.bones["%s"].%s' % (name, prop) for name in poses[0] for prop in ('location', 'rotation_quaternion', 'scale')}
+    while True:  # look each one up afresh: removing F-curves can move the others
+        old = next(((f.data_path, f.array_index) for f in rig_tools._fcurves(action) if f.data_path in paths), None)
+        if old is None:
+            break
+        rig_tools._remove(action, rig_tools._find(action, *old))
+    for name in poses[0]:
+        for slot, (prop, size) in enumerate((('location', 3), ('rotation_quaternion', 4), ('scale', 3))):
+            for index in range(size):
+                path = 'pose.bones["%s"].%s' % (name, prop)
+                if hasattr(action, 'fcurve_ensure_for_datablock'):
+                    fc = action.fcurve_ensure_for_datablock(armature, path, index=index, group_name=name)
+                else:
+                    fc = action.fcurves.new(path, index=index, action_group=name)
+                fc.keyframe_points.add(len(poses))
+                for frame, (point, pose) in enumerate(zip(fc.keyframe_points, poses)):
+                    point.co = (frame + 1, pose[name][slot][index])
+                    point.interpolation = 'LINEAR'
+                fc.modifiers.new('CYCLES')
+                fc.update()
 
 
 def load_clip(path):

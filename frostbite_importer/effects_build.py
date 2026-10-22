@@ -158,6 +158,16 @@ def particle_material(name, emitter, image, source='INSTANCER'):
     t.link(tint, color.inputs['B'])
     color = color.outputs['Result']
     alpha = t.curve(age, emitter['curves']['alpha']) if emitter['curves'].get('alpha') else 1.0
+    tracks = emitter['particles']
+    if tracks.get('alpha_track'):  # each particle's own transparency (Battle for Neighborville)
+        alpha = t.math('MULTIPLY', alpha, instancer('fx_alpha'))
+    if image is None and emitter.get('soft'):  # a procedural sprite: a soft round blob
+        uv = t.node('ShaderNodeSeparateXYZ')
+        t.link(t.node('ShaderNodeTexCoord').outputs['UV'], uv.inputs[0])
+        du, dv = t.math('SUBTRACT', uv.outputs['X'], 0.5), t.math('SUBTRACT', uv.outputs['Y'], 0.5)
+        r2 = t.math('MULTIPLY', t.math('ADD', t.math('MULTIPLY', du, du), t.math('MULTIPLY', dv, dv)), 4.0)
+        blob = t.math('MAXIMUM', t.math('SUBTRACT', 1.0, r2), 0.0)
+        alpha = t.math('MULTIPLY', alpha, t.math('MULTIPLY', blob, blob))
 
     if image is not None:
         tex = t.node('ShaderNodeTexImage', image=image, extension='EXTEND')
@@ -195,7 +205,7 @@ def particle_material(name, emitter, image, source='INSTANCER'):
     if emitter.get('emissive'):
         shader = t.node('ShaderNodeEmission')
         t.link(color, shader.inputs['Color'])
-        t.set(shader.inputs['Strength'], t.curve(age, strengths))
+        t.set(shader.inputs['Strength'], instancer('fx_glow') if tracks.get('glow_track') else t.curve(age, strengths))
     else:
         shader = t.node('ShaderNodeBsdfPrincipled')
         t.link(color, shader.inputs['Base Color'])
@@ -408,13 +418,31 @@ def tracked_nodes(name, emitter, instance, camera, ribbon_material=None):
     a1 = sample(t.attribute('fx_angle'), t.math('ADD', first, 1.0), 'FLOAT')
     angle = t.math('ADD', a0, t.math('MULTIPLY', t.math('SUBTRACT', a1, a0), weight))
 
+    def keyed(attr, kind='FLOAT'):
+        """A per-particle value recorded at each path point, blended at the particle's age."""
+        v0, v1 = sample(t.attribute(attr, kind), first, kind), sample(t.attribute(attr, kind), t.math('ADD', first, 1.0), kind)
+        if kind == 'FLOAT':
+            return t.math('ADD', v0, t.math('MULTIPLY', t.math('SUBTRACT', v1, v0), weight))
+        return t.vmath('ADD', v0, t.vmath('SCALE', t.vmath('SUBTRACT', v1, v0), scale=weight))
+
     geometry = gi.outputs['Geometry']
     geometry = _store(t, geometry, 'fx_age', fraction)
     geometry = _store(t, geometry, 'fx_pos', position, 'FLOAT_VECTOR')
     geometry = _store(t, geometry, 'fx_vel', velocity, 'FLOAT_VECTOR')
     geometry = _store(t, geometry, 'fx_spin_now', angle)
+    # Battle for Neighborville particles carry their own size, colour, transparency and turn per path point.
+    for track, attr, store, kind in (('size_track', 'fx_k_size', 'fx_s3', 'FLOAT_VECTOR'),
+                                     ('color_track', 'fx_k_color', 'fx_tint', 'FLOAT_VECTOR'),
+                                     ('alpha_track', 'fx_k_alpha', 'fx_alpha', 'FLOAT'),
+                                     ('glow_track', 'fx_k_glow', 'fx_glow', 'FLOAT'),
+                                     ('euler_track', 'fx_k_euler', 'fx_euler', 'FLOAT_VECTOR')):
+        if p.get(track):
+            geometry = _store(t, geometry, store, keyed(attr, kind), kind)
     frames = emitter['frames']
-    if frames > 1:
+    if frames > 1 and p.get('cell_track'):
+        cell = keyed('fx_k_cell')
+        geometry = _store(t, geometry, 'fx_cell', t.math('FLOORED_MODULO', t.math('FLOOR', cell), frames))
+    elif frames > 1:
         cell = t.attribute('fx_frame')
         rate = emitter.get('anim_speed') or 0.0
         if emitter.get('anim_on_life'):
@@ -500,9 +528,14 @@ def tracked_nodes(name, emitter, instance, camera, ribbon_material=None):
     t.link(sx, scale.inputs['X'])
     t.link(sy, scale.inputs['Y'])
     t.link(sx if emitter['kind'] == 'mesh' else size, scale.inputs['Z'])
+    scale = scale.outputs['Vector']
+    if p.get('size_track'):
+        scale = t.attribute('fx_s3', 'FLOAT_VECTOR')
 
     spin = t.attribute('fx_spin_now')
-    if emitter['kind'] == 'mesh':
+    if emitter['kind'] == 'mesh' and p.get('euler_track'):
+        rotation = t.attribute('fx_euler', 'FLOAT_VECTOR')
+    elif emitter['kind'] == 'mesh':
         euler = t.node('ShaderNodeCombineXYZ')
         t.link(spin, euler.inputs['Z'])
         t.link(t.math('MULTIPLY', spin, 0.7), euler.inputs['X'])
@@ -539,7 +572,7 @@ def tracked_nodes(name, emitter, instance, camera, ribbon_material=None):
     t.link(geometry, place.inputs['Points'])
     t.link(source.outputs['Geometry'], place.inputs['Instance'])
     t.link(rotation, place.inputs['Rotation'])
-    t.link(scale.outputs['Vector'], place.inputs['Scale'])
+    t.link(scale, place.inputs['Scale'])
     t.link(place.outputs['Instances'], go.inputs['Geometry'])
     return group
 
@@ -584,6 +617,13 @@ def emitter_object(importer, emitter, name, collection, holder, camera):
         if p.get('flip'):
             flip[:, :2] = np.asarray(p['flip'], np.float64)
         add('fx_flip', flip, 'FLOAT_VECTOR')
+        # Per-particle tracks sit on the path points; the particle points repeat their first key.
+        for track, attr in (('size_track', 'fx_k_size'), ('color_track', 'fx_k_color'), ('alpha_track', 'fx_k_alpha'),
+                            ('glow_track', 'fx_k_glow'), ('cell_track', 'fx_k_cell'), ('euler_track', 'fx_k_euler')):
+            if p.get(track):
+                values = np.asarray(p[track], np.float32)
+                values = np.concatenate([values[:, 0], values.reshape((-1,) + values.shape[2:])])
+                add(attr, values, 'FLOAT_VECTOR' if values.ndim == 2 else 'FLOAT')
     else:
         add('fx_rotation', p['rotation'])
         add('fx_spin', p['spin'])

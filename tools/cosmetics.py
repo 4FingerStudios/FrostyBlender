@@ -30,8 +30,24 @@ PATTERNS = {
     'gw2': re.compile(r'^win32/characters/(plants|zombie)/playable/([^/]+)/([^/]+)/([^/]+?)_(?:att)?unlockasset_bpb$'),
     'bfn': re.compile(r'^win32/characters(?:_cu\d+)?/(plant|zombie)/playable/([^/]+)/([^/]+)/(?:[^/]+/)*([^/]+?)_(?:visualasset|unlockasset)_bpb$'),
 }
-SKIPPED_SLOTS = {'tattoo', 'tattoos', 'textures', 'emote', 'emotes', 'ui', 'animation', 'animations'}
+# Tattoo and emote slots hold no meshes of their own: tattoos come from their visual unlocks (TATTOOS) and
+# emotes from the animation clips (emotes()) when discover() is asked for extras.
+SKIPPED_SLOTS = {'tattoo', 'tattoos', 'textures', 'emote', 'emotes', 'ui', 'animation', 'animations',
+                 'spheretattoo', 'capetattoo', 'tattoohead'}
 MESH_TYPES = ('SkinnedMeshAsset', 'RigidMeshAsset', 'CompositeMeshAsset')
+# Tattoos are material variations of a head or body mesh, one visual unlock per design and character
+# variant: GW2 <char>_tattoo_<design>[silver|gold]_<variant>, GW1 <char>_head_<head>_<design>. GW2 also
+# tattoos Citron's sphere form, Super Brainz's cape and Kernel Corn's head apart from the body.
+TATTOOS = {
+    'gw1': re.compile(r'^(?:win32|xenon)/_pvz/animations/characters/(plants|zombies)/([^/]+)/(?:attachments/)?(tattoos?)/([^/]+?)_visunlockasset_bpb$'),
+    'gw2': re.compile(r'^win32/characters/(plants|zombie)/playable/([^/]+)/(tattoos?|spheretattoo|capetattoo|tattoohead)/([^/]+?)_visunlockasset_bpb$'),
+}
+TATTOO_SLOTS = {'spheretattoo': 'sphere_tattoos', 'capetattoo': 'cape_tattoos', 'tattoohead': 'head_tattoos'}
+# Emotes (the games' gestures and taunts) are animation clips: items name them as clip:<key>:<banks>.
+EMOTE = re.compile(r'gesture|taunt|(?<!r)emote|heroic_pose', re.I)
+EMOTE_WORD = re.compile(r'gesture|taunt|emote|heroic', re.I)  # the word of a clip name that starts the emote's own name
+NPC_CLIP = re.compile(r'(?:^|_)npc(?:_|$)', re.I)
+CLIP = 'clip:'
 
 
 def game_kind(game):
@@ -222,12 +238,169 @@ def bundle_names(game, kind):
     return list(out.values())
 
 
-def discover(game):
+def tattoo_name(kind, character, stem):
+    """chomper_tattoo_clawmarkssilver_chomper -> Clawmarks Silver (Chomper); cactus_head_bandit_camoblue ->
+    Camoblue (Bandit)."""
+    stem = re.sub(r'^%s_(?:[a-z]*tattoo[a-z]*_|head_)?' % re.escape(character), '', stem)
+    if kind == 'gw1':
+        variant, _, design = stem.partition('_')
+    else:
+        design, _, variant = stem.rpartition('_')
+    design = re.sub(r'(?<=[a-z])(silver|gold)$', r'_\1', design or stem)
+    return '%s (%s)' % (title(design), title(variant)) if design and variant else title(stem)
+
+
+def _gw_document(location):
+    path, offset, size, source = location
+    with path.open('rb') as stream:
+        stream.seek(offset)
+        return gw2.Ebx(gw2.decompress(gw2.Reader(stream.read(size)), source['original_size'])).document()
+
+
+def gesture_names(game, kind):
+    """In-game gesture names, per clip prefix (Chomper, AssaultCorn...): GW2 by gesture wheel index (its
+    GestureUnlockAssets matched to the UI items), GW1 by the number in the UI picture name."""
+    if kind == 'bfn':
+        return {}
+    by_id, indexes, out = {}, {}, {}
+    for location in gw2.cached_dependency_index(Path(game))['ebx'].values():
+        name = location[3]['name'].lower()
+        try:
+            if re.search(r'_pvz/ui/customization/[^/]+/[^/]+_gestures?$', name):
+                for o in _gw_document(location)['objects']:
+                    if o.get('$type') == 'UIKitItemDescription':
+                        for i in o.get('ItemIds') or []:
+                            by_id[i] = (o.get('TexturePath') or '').split('/')[-1]
+            elif kind == 'gw2' and '/gestures/' in name and 'gestureunlock' in name:
+                o = _gw_document(location)['objects'][0]
+                indexes[o.get('Identifier')] = o.get('GestureIndex')
+        except (ValueError, OSError, struct.error, IndexError, KeyError):
+            continue
+    for ident, picture in by_id.items():
+        if kind == 'gw2':
+            prefix, _, label = picture.partition('_Gesture_')
+            number = indexes.get(ident)
+        else:  # Chomper15_No
+            m = re.match(r'([A-Za-z]+?)(\d+)_?(.*)$', picture)
+            prefix, number, label = (m.group(1), int(m.group(2)), m.group(3)) if m else ('', None, '')
+        label = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', label.replace('_', ' ')).replace(' ,', ',').strip()  # HotSteppin
+        if prefix and number is not None and label:
+            out.setdefault(prefix.lower(), {})[number] = label
+    return out
+
+
+def _own_clip(clip, character):
+    """Whether a clip's name starts with its rig's character (Eng_ for Engineer, S_Dragon_ for SnapDragon), not one
+    borrowed from another character (Chomper's rig plays Peashooter_Gesture_Celebrate)."""
+    words = re.split(r'_', clip)
+    at = next((i for i, w in enumerate(words) if EMOTE_WORD.match(w)), len(words))
+    prefix, char = ''.join(words[:at]).lower(), character.replace(' ', '').lower()
+    return not prefix or prefix in char or char in prefix or (char[:1] == prefix[:1] and char.endswith(words[at - 1].lower()))
+
+
+def _emote_label(clip):
+    """Chomper_Gesture_Dance_01 -> Dance 01; Rose_Petal_Confetti_Gesture -> Petal Confetti; Chomper_Taunt_03 -> Taunt 03."""
+    words = [w for w in re.split(r'[_\s]+', clip) if w]
+    at = next((i for i, w in enumerate(words) if EMOTE_WORD.match(w)), None)
+    if at is None:
+        return title('_'.join(words[1:]) or clip)
+    rest = words[at + 1:] if at + 1 < len(words) else words[1:at]
+    if words[at].lower().startswith(('taunt', 'heroic')):
+        rest = [re.sub(r's$', '', words[at].capitalize())] + rest  # Cactus_Taunts_03 -> Taunt 03
+    return ' '.join(w if w.isupper() else w.capitalize() for w in rest) or title(clip)
+
+
+def _gesture_slot(kind, clips):
+    """Clip key -> gesture wheel index (GW2) or UI number (GW1) for a character's gesture clips."""
+    out = {}
+    if kind == 'gw2':
+        def number(name):
+            m = re.search(r'(\d+)$', name)
+            return int(m.group(1)) if m else 1
+        for role, first in (('personality', 3), ('dance', 5)):
+            found = sorted((c for c in clips if role in c['name'].lower() and 'loop' not in c['name'].lower()),
+                           key=lambda c: number(c['name']))
+            for offset, c in enumerate(found[:2]):
+                out[c['key']] = first + offset
+        for c in clips:
+            low = c['name'].lower()
+            if 'celebrat' in low:
+                out.setdefault(c['key'], 0)
+            elif re.search(r'_(?:yes|positive)$', low):
+                out.setdefault(c['key'], 1)
+            elif re.search(r'_(?:no|negative)$', low):
+                out.setdefault(c['key'], 2)
+    elif kind == 'gw1':
+        basics = {'celebrate': 11, 'follow': 12, 'point': 13, 'wave': 14, 'no': 15, 'yes': 16}
+        for c in clips:
+            low = c['name'].lower().replace(' ', '')
+            m = re.search(r'_taunts?_(\d+)$', low)
+            word = re.search(r'_gesture_([a-z]+)$', low)
+            if m and int(m.group(1)) <= 10:
+                out[c['key']] = int(m.group(1))
+            elif word and word.group(1) in basics:
+                out[c['key']] = basics[word.group(1)]
+    return out
+
+
+def emotes(game, kind):
+    """Character id -> its emote items: gesture and taunt clips of the character's animation rig, named as in
+    the game where its gesture tables say so. Built from the animation clip index (cached per install)."""
+    import animations
+    try:
+        index = animations.discover(game)
+    except (ValueError, OSError, struct.error) as error:
+        print('No emotes: %s' % error, flush=True)
+        return {}
+    names = gesture_names(game, kind)
+    out = {}
+    for rig in index['characters']:
+        model = rig.get('model') or {}
+        if model.get('section') != 'Characters':
+            continue
+        clips = [c for c in rig['clips'] if EMOTE.search(c['name']) and not NPC_CLIP.search(c['name'])]
+        character = animations.character_of(rig['rig'])
+        own = [c for c in clips if _own_clip(c['name'], character)]
+        slots = _gesture_slot(kind, own)
+        labels = names.get(character.replace(' ', '').lower(), {})
+        items = out.setdefault(model['id'], [])
+        for c in clips:
+            label = _emote_label(c['name'])
+            number = slots.get(c['key'])
+            if c not in own:
+                label = '%s (%s)' % (label, title(c['name'].split('_')[0]))
+            elif labels.get(number) and labels[number].lower() != label.lower():
+                label = '%s (%s)' % (labels[number], label)
+            items.append({'name': label, 'bundle': '%s%s:%s' % (CLIP, c['key'], c.get('banks') or ''), 'sb': '',
+                          'clip': c['name'], 'order': number if number is not None else 99})
+    return out
+
+
+def clip_item(item):
+    """An emote item as animations.py export takes it, or None for a mesh item."""
+    bundle = item.get('bundle') or ''
+    if not bundle.startswith(CLIP):
+        return None
+    key, _, banks = bundle[len(CLIP):].partition(':')
+    return {'name': item.get('clip') or item.get('name'), 'key': key, 'banks': banks or None}
+
+
+def discover(game, extras=False):
+    """Characters and their cosmetic slots. With `extras`, also tattoos and emotes (emotes read the animation
+    clip index, slow the first time on an install)."""
     kind = game_kind(game)
     pattern = PATTERNS[kind]
     characters = {}
     for name, sb in bundle_names(game, kind):
         match = pattern.match(name.lower())
+        tattoo = TATTOOS.get(kind) and TATTOOS[kind].match(name.lower())
+        if extras and tattoo and not match:
+            team, character, folder, stem = tattoo.groups()
+            entry = characters.setdefault(character, {'name': title(character), 'id': character,
+                                                      'team': 'Plants' if team.startswith('plant') else 'Zombies', 'slots': {}})
+            entry['slots'].setdefault(TATTOO_SLOTS.get(folder, 'tattoos'), []).append(
+                {'name': tattoo_name(kind, character, stem), 'bundle': name, 'sb': sb})
+            continue
         if not match:
             continue
         team, character, slot, stem = match.groups()
@@ -243,9 +416,14 @@ def discover(game):
         team = 'Plants' if team.startswith('plant') else 'Zombies'
         entry = characters.setdefault(character, {'name': title(character), 'id': character, 'team': team, 'slots': {}})
         entry['slots'].setdefault(slot, []).append({'name': title(item) or title(stem), 'bundle': name, 'sb': sb})
+    for character, items in (emotes(game, kind) if extras else {}).items():
+        if character in characters and items:
+            items.sort(key=lambda i: (i['order'], i['name']))
+            characters[character]['slots']['emotes'] = [{k: v for k, v in i.items() if k != 'order'} for i in items]
     for entry in characters.values():
-        for items in entry['slots'].values():
-            items.sort(key=lambda i: i['name'])
+        for slot, items in entry['slots'].items():
+            if slot != 'emotes':
+                items.sort(key=lambda i: i['name'])
     return {'game': kind, 'characters': sorted(characters.values(), key=lambda c: (c['team'], c['name']))}
 
 
@@ -386,6 +564,14 @@ def gw_export(game, kind, items, output):
 
 def export(game, items, output, names=None):
     kind = game_kind(game)
+    meshes = [i for i in items if not clip_item(i)]
+    if len(meshes) < len(items):  # emotes are decoded from the animation banks at conversion
+        inventory = export(game, meshes, output, names) if meshes else {
+            'profile': kind, 'game': str(game), 'game_root': str(game), 'package': 'cosmetics', 'assets': [], 'errors': []}
+        inventory.update(items=items, game_root=str(game))
+        Path(output).mkdir(parents=True, exist_ok=True)
+        (Path(output) / 'inventory.json').write_text(json.dumps(inventory, indent=1), encoding='utf-8')
+        return inventory
     if kind == 'bfn':
         import bfn
         if not names:
@@ -506,7 +692,7 @@ def convert(export_dir, textures, assets, out):
         converter.cutouts = False
         converter.skinned = True
 
-        def mesh_of(doc, obj):
+        def mesh_of(doc, obj, variation=0):
             rel, materials = converter.mesh(doc, obj)[:2]
             return rel, materials
     else:
@@ -515,12 +701,27 @@ def convert(export_dir, textures, assets, out):
         converter = gw2_convert.Gw2Converter(archive, textures, assets)
         converter.skinned = True
 
-        def mesh_of(doc, obj):
-            return converter.convert_static((doc, obj), 0)
+        def mesh_of(doc, obj, variation=0):
+            return converter.convert_static((doc, obj), variation)
     def document(name):
         doc = archive.documents.get(name)
         doc = doc[1] if isinstance(doc, tuple) else doc
         return doc.load() if hasattr(doc, 'load') else doc
+
+    # A tattoo's bundle pairs the head or body mesh with its ObjectVariation; that mesh converts with the
+    # variation's materials (the tattoo textures and shader), whichever item brought the mesh in.
+    variation_of = {}
+    tattoo_bundles = {i['bundle'].lower() for i in inventory.get('items', [])
+                      if kind in TATTOOS and TATTOOS[kind].match((i.get('bundle') or '').lower())}
+    for asset in inventory['assets'] if tattoo_bundles else ():
+        if asset.get('root_type') != 'BlueprintBundle' or (asset.get('bundle') or '').lower() not in tattoo_bundles:
+            continue
+        doc = document(asset['name'])  # a LazyDocument reads as empty until first indexed: no `doc or {}`
+        for obj in (doc.get('objects') or [] if doc is not None else []):
+            if obj.get('$type') == 'MeshAndVariationPair':
+                mesh, variation = archive.resolve(doc, obj.get('MeshAsset')), archive.resolve(doc, obj.get('Variation'))
+                if mesh and variation and variation[1].get('NameHash'):
+                    variation_of[mesh[0]['guid']] = variation[1]['NameHash']
 
     def rigs_of(character, mesh_name):
         """The character's rigs, those from the mesh's own folder family first (BFN mixes in GW2's)."""
@@ -558,7 +759,7 @@ def convert(export_dir, textures, assets, out):
         item = item_of.get((asset.get('bundle') or '').lower())
         label = ('%s (%s)' % (item['name'], title(item['slot'])) if item.get('slot') else item['name']) if item             else asset['name'].split('/')[-1]
         try:
-            rel, materials = mesh_of(doc, obj)
+            rel, materials = mesh_of(doc, obj, variation_of.get(doc.get('guid'), 0))
         except Exception as error:  # one bad mesh must not lose the other items
             errors.append({'stage': 'mesh', 'name': asset['name'], 'error': str(error)})
             continue
@@ -588,14 +789,23 @@ def convert(export_dir, textures, assets, out):
         converter.finish_textures()
     for key in used:
         rigs[key].write(Path(assets) / rig_file(key))
-    if not places:
+    clips = [c for c in (clip_item(i) for i in inventory.get('items', [])) if c]
+    decoded = {'clips': [], 'errors': []}
+    if clips:  # emotes: one decoded clip each, for the add-on to put on the character's armature
+        import animations
+        decoded = animations.export(inventory.get('game_root') or inventory['game'], clips, Path(assets) / 'clips')
+        errors += [{'stage': 'clip', 'name': e.get('clip'), 'error': e.get('error')} for e in decoded['errors']]
+    meshes = len(places)
+    if not places and not decoded['clips']:
         raise ValueError('No cosmetic meshes converted' + (': ' + errors[0]['error'] if errors else ''))
-    places.insert(0, {'kind': 'frostbite_environment', 'name': 'Cosmetics lighting', 'at': [0, 0, 0], 'tags': {},
-                      'values': {'sun_intensity': 2.4}})
+    if places:
+        places.insert(0, {'kind': 'frostbite_environment', 'name': 'Cosmetics lighting', 'at': [0, 0, 0], 'tags': {},
+                          'values': {'sun_intensity': 2.4}})
     scene = {'format': 'aura-frostbite-scene', 'version': 1, 'name': 'Cosmetics', 'places': places}
-    report = {'profile': kind, 'placements': len(places), 'meshes': len(places) - 1, 'textures': 0, 'errors': errors,
+    report = {'profile': kind, 'placements': len(places), 'meshes': meshes, 'textures': 0, 'errors': errors,
               'skeletons': {rig_file(k).rsplit('/', 1)[-1][:-5]: rigs[k].name for k in used},
-              'rigged_meshes': sum(1 for p in places if 'skin' in p['tags'])}
+              'rigged_meshes': sum(1 for p in places if 'skin' in p['tags']), 'clips': decoded['clips'],
+              'tattooed_meshes': len(variation_of)}
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(scene, indent=1), encoding='utf-8')
     out.with_suffix('.report.json').write_text(json.dumps(report, indent=1), encoding='utf-8')
@@ -612,9 +822,10 @@ def main():
     p.add_argument('--export')
     p.add_argument('--textures')
     p.add_argument('--assets')
+    p.add_argument('--extras', action='store_true', help='discover: also tattoos and emotes')
     a = p.parse_args()
     if a.action == 'discover':
-        Path(a.out).write_text(json.dumps(discover(a.game), indent=1), encoding='utf-8')
+        Path(a.out).write_text(json.dumps(discover(a.game, a.extras), indent=1), encoding='utf-8')
     elif a.action == 'export':
         export(a.game, json.loads(Path(a.items).read_text(encoding='utf-8')), a.out, a.names)
     else:

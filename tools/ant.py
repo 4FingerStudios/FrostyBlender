@@ -546,6 +546,11 @@ class Database:
                 n, t = slots.get(dof, ('Unknown_%d' % dof, 0))
                 ordered.append((n, t, dof))
         elif game == 'gw2':
+            # DofIds index the rig's whole hierarchy, while a clip may target only part of it (a face or a
+            # weapon layout), so names come from the rig's root.
+            root = self.get(((rig or {}).get('DofSetLists') or [None])[0])
+            if root is not None and root['__guid'] != (target_obj or {}).get('__guid'):
+                names = self.channel_names(root['__guid'])[0]
             positions = {d: i for i, d in enumerate((rig or {}).get('DofIds') or [])}
             for dof in index:
                 i = positions.get(dof, -1)

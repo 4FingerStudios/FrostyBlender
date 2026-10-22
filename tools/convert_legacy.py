@@ -6,6 +6,7 @@ import argparse, hashlib, json, os, re, struct
 from pathlib import Path
 import numpy as np
 from convert import Archive, png, write_mesh, write_skin, read_attr, skin_attrs
+import bfn_maps
 import bfn_terrain
 
 MESHSET_TYPE = 0x49B156D4
@@ -128,8 +129,11 @@ def havok_instances(data, expected):
 
 
 class LegacyConverter:
-    def __init__(self, archive, textures, assets, game, everything=False):
+    def __init__(self, archive, textures, assets, game, everything=False, choice=None):
         self.archive = archive; self.game = game; self.everything = everything
+        # Battle for Neighborville: one map of a level file ('tvm', 'davesmansion-night'; tools/bfn_maps.py).
+        self.choice = choice; self.area = bfn_maps.chosen(choice)[0]
+        self.subworlds = {n.split('/')[-1] for n, (a, d) in archive.documents.items() if a.get('root_type') == 'SubWorldData'}
         self.texdir = Path(textures); self.texture_info = json.loads((self.texdir / 'textures.json').read_text())['textures']
         self.assets = Path(assets); self.meshes = {}; self.materials = {}; self.texture_paths = {}; self.errors = []
         self.counts = {'triangles': 0, 'vertices': 0, 'instances': 0, 'skipped_hidden': 0, 'terrain_tiles': 0}
@@ -257,7 +261,8 @@ class LegacyConverter:
         name = mesh_obj.get('Name', '').split('/')[-1]
         tags = {'mesh': rel, 'source': mesh_obj.get('Name', '')}
         tags.update({f'material_{i}': m for i, m in enumerate(mats)})
-        places.append({'kind': 'frostbite_mesh', 'name': name, 'matrix': matrix.tolist(), 'tags': tags, 'values': {'collision': 1}})
+        places.append({'kind': 'frostbite_mesh', 'name': name, 'matrix': matrix.tolist(), 'tags': tags, 'values': {'collision': 1},
+                       '_source': source})
         self.floor.append((rid_of(mesh_obj), matrix))
         self.counts['instances'] += 1
 
@@ -324,7 +329,7 @@ class LegacyConverter:
             places.append({'kind': 'frostbite_mesh', 'name': 'BFN terrain tile', 'matrix': placement.tolist(),
                            'tags': {'mesh': rel, 'material_0': material, 'source': terrain_obj.get('Name', ''),
                                     'source_level': source, 'terrain_rect': list(n['rect'])},
-                           'values': {'collision': 1}})
+                           'values': {'collision': 1}, '_source': source})
             self.floor.append((key, placement))
             self.counts['terrain_tiles'] += 1
         if missing:
@@ -337,7 +342,7 @@ class LegacyConverter:
         if self.everything: return True
         if self.game == 'bfn':
             leaf = (ref.get('BundleName') or '').replace('\\', '/').split('/')[-1].lower()
-            return bool(leaf) and not BFN_SKIPPED.search(leaf)
+            return bool(leaf) and not BFN_SKIPPED.search(leaf) and bfn_maps.keeps(leaf, self.subworlds, self.choice)
         return ref.get('AutoLoad', True) and not ref.get('InclusionSettings')
 
     def walk(self, places, doc, obj, matrix, source, depth=0, stack=()):
@@ -366,7 +371,7 @@ class LegacyConverter:
                     if entry and entry[1]['objects']: child = (entry[1], entry[1]['objects'][0])
                 if not child: return
                 local = matrix @ transform(obj.get('BlueprintTransform', {}))
-                name = child[0].get('name') or source
+                name = (obj.get('BundleName') or '').lower() or child[0].get('name') or source
                 self.walk(places, child[0], child[1], local, name if kind == 'SubWorldReferenceObjectData' else source, depth + 1, stack)
             elif kind == 'ObjectBlueprint':
                 child = self.resolve(doc, obj.get('Object'))
@@ -410,6 +415,41 @@ class LegacyConverter:
             except Exception as e:
                 self.errors.append({'stage': 'group member', 'source': source, 'error': str(e)})
 
+    # ---- one map of a bigger level ----
+    def anchor_points(self):
+        """Spawns and points of interest of the sub-worlds a choice's area names (a region's gamemode_tvm),
+        which are game logic and so not placed."""
+        points, seen = [], set()
+        queue = [(entry[1], np.eye(4)) for name, entry in self.by_name.items()
+                 if entry[0].get('root_type') == 'SubWorldData' and bfn_maps.anchor(name.split('/')[-1], self.area)]
+        while queue:
+            doc, matrix = queue.pop()
+            if doc['guid'] in seen: continue
+            seen.add(doc['guid'])
+            for obj in doc['objects']:
+                kind = obj.get('$type', '')
+                if kind in ('SubWorldReferenceObjectData', 'LayerReferenceObjectData'):
+                    child = self.resolve(doc, obj.get('Blueprint'))
+                    entry = self.by_name.get((obj.get('BundleName') or '').lower())
+                    target = child[0] if child else entry[1] if entry else None
+                    if target: queue.append((target, matrix @ transform(obj.get('BlueprintTransform', {}))))
+                elif kind.endswith('SpawnEntityData') or kind == 'PointOfInterestEntityData':
+                    at = matrix @ transform(obj.get('Transform', {}))
+                    points.append((at[0, 3], at[2, 3]))
+        return points
+
+    def crop(self, places):
+        """Keep the placements around the chosen area: its own sub-world's placements, or else its spawns."""
+        own = [(p['matrix'][0][3], p['matrix'][2][3]) for p in places
+               if bfn_maps.anchor((p.get('_source') or '').split('/')[-1], self.area)]
+        box = bfn_maps.bounds(own or self.anchor_points())
+        if not box: raise ValueError('The level has nothing named %r to crop the map to' % self.area)
+        kept = [p for p in places if bfn_maps.inside(box, p['matrix'][0][3], p['matrix'][2][3])]
+        self.floor = [(rid, m) for rid, m in self.floor if bfn_maps.inside(box, m[0, 3], m[2, 3])]
+        self.counts['cropped'] = len(places) - len(kept)
+        self.counts['crop_bounds'] = [round(v, 1) for v in box]
+        return kept
+
     # ---- spawn ----
     def floor_at(self, x, z):
         best = None
@@ -448,6 +488,8 @@ class LegacyConverter:
         if not entry: raise ValueError('Level root document missing: ' + root_name)
         places = []
         self.walk(places, entry[1], entry[1]['objects'][0], np.eye(4), root_name)
+        if self.area: places = self.crop(places)
+        for p in places: p.pop('_source', None)
         if not places: raise ValueError('No map placements were converted')
         positions = np.array([np.array(p['matrix'])[:3, 3] for p in places])
         spawn = np.median(positions, axis=0)
@@ -493,12 +535,18 @@ def main():
     p.add_argument('--export', required=True); p.add_argument('--textures', required=True); p.add_argument('--assets', required=True)
     p.add_argument('--out', required=True); p.add_argument('--level', required=True); p.add_argument('--title')
     p.add_argument('--everything', action='store_true', help='also place game-mode sublevels')
+    p.add_argument('--variant', help="Battle for Neighborville: one map of the level file, e.g. 'tvm' or 'davesmansion-night'")
     a = p.parse_args()
+    if a.variant and not re.fullmatch(r'[0-9a-z-]+', a.variant): raise SystemExit('Invalid map variant')
     archive = Archive(a.export)
     game = archive.inventory.get('game')
     if game not in MESH_LAYOUT: raise SystemExit('Export is not a Garden Warfare 2 or Battle for Neighborville level')
-    converter = LegacyConverter(archive, a.textures, a.assets, game, a.everything)
-    scene, report = converter.scene(level_root(a.level), a.title or title_of(a.level))
+    converter = LegacyConverter(archive, a.textures, a.assets, game, a.everything, a.variant if game == 'bfn' else None)
+    title = a.title
+    if not title and game == 'bfn' and archive.inventory.get('game_root'):
+        title = bfn_maps.title(archive.inventory['game_root'], level_root(a.level).split('/')[-1], a.variant)
+    scene, report = converter.scene(level_root(a.level), title or title_of(a.level))
+    report['variant'] = a.variant
     out = Path(a.out); out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(scene, indent=2)); out.with_suffix('.report.json').write_text(json.dumps(report, indent=2))
     print(json.dumps({k: v for k, v in report.items() if k not in ['errors', 'limitations']}, indent=2)); print('Errors:', len(report['errors']))

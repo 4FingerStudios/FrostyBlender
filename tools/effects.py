@@ -1,4 +1,5 @@
-"""Visual effects (explosions, muzzle flashes, smoke, sparks) from Garden Warfare 1 and 2.
+"""Visual effects (explosions, muzzle flashes, smoke, sparks) from Garden Warfare 1 and 2 and Battle for
+Neighborville.
 
 An effect is an EffectBlueprint whose EffectEntityData lists emitters and lights. Each emitter is a
 ScalableEmitterDocument: a template (count, lifetime, texture flipbook, mesh) and a chain of
@@ -10,11 +11,15 @@ the Blender add-on plays them back with Geometry Nodes, so the timeline scrubs w
 GPU emitters are read into the same processors. Semantics follow the game data and V0e's VFX Editor
 plugin for Frosty (types, alignments, cone angles, motion stretch).
 
+Battle for Neighborville builds its particles as EmitterGraphs: node graphs compiled into a spawn and a
+simulate compute shader. Those shaders are run on the CPU (emitter_graph.py, dxbc.py) and every particle's
+position, size, spin, colour and transparency recorded over its life, so they play as the game computes them.
+
 Approximated: turbulence, alpha erosion, ribbons (flat strips) and beams (quads).
 Not ported: wind, collisions, heat distortion and sounds (listed in each effect's notes).
 
     python effects.py discover --game GAME --out effects.json
-    python effects.py export --game GAME --items items.json --out EXPORT
+    python effects.py export --game GAME --items items.json --out EXPORT [--names BFN_TYPES]
     python effects.py convert --export EXPORT --textures TEXTURES --assets ASSETS --out scene.json
 
 Game files are only read.
@@ -52,10 +57,55 @@ def _effect(name):
     return {'name': title(leaf), 'group': group.lower(), 'asset': name, 'bundle': 'asset:' + name, 'sb': ''}
 
 
+# Battle for Neighborville keeps effects beside what uses them; these folder names say nothing on their own.
+BFN_SKIP = GROUP_SKIP | {'characters', 'playable', 'gw2_fx', 'abilities', 'boss', 'subboss', 'horde', 'fx'}
+BFN_PARTS = ('_textures', 'textures', '_meshes', 'emitters', '_shader', '_shaders', 'decal', '_ve', 'shaderbox', '_visualguide')
+
+
+def _bfn_effect(name):
+    parts = [p for p in name.split('/') if p.lower() not in BFN_SKIP and not re.fullmatch(r'characters_cu\d+|cu_\d+_\d+', p.lower())]
+    leaf = re.sub(r'^fx_', '', parts[-1], flags=re.I)
+    group = '/'.join(parts[:2]) if len(parts) > 2 else (parts[0] if len(parts) > 1 else 'effects')
+    return {'name': title(leaf), 'group': group.lower(), 'asset': name, 'bundle': 'asset:' + name, 'sb': ''}
+
+
+def bfn_discover(game):
+    """Effect blueprints by name (fx_*): bundle manifests list names without the initfs key."""
+    import bfn
+    archive = bfn.Archive(game)
+    names = {}
+    for sb in archive.sbs:
+        if '/loc/' in sb.lower():
+            continue
+        for entry in archive.toc(sb)['bundles'].values():
+            try:
+                listed = archive.bundle(entry)
+            except (ValueError, struct.error, IndexError):
+                continue
+            for a in listed:
+                if a['kind'] == 'ebx':
+                    names.setdefault(a['name'].lower(), a['name'])
+    effects = []
+    for low, name in names.items():
+        parts = low.split('/')
+        leaf = parts[-1]
+        if not leaf.startswith('fx_') or leaf.startswith('fx_pf_') or any(p in BFN_PARTS for p in parts[:-1]):
+            continue
+        if leaf.endswith(('class', '_schematics', '_channel', '_prefab', '_perplayer')):
+            continue
+        effects.append(_bfn_effect(name))
+    return effects
+
+
 def discover(game):
     kind = game_kind(game)
     if kind == 'bfn':
-        raise ValueError('Effects are not supported for Battle for Neighborville yet')
+        effects = bfn_discover(game)
+        effects.sort(key=lambda e: (e['group'], e['name']))
+        groups = {}
+        for e in effects:
+            groups.setdefault(e['group'], []).append(e)
+        return {'game': kind, 'groups': [{'name': g, 'effects': v} for g, v in sorted(groups.items())]}
     index = gw2.cached_dependency_index(Path(game))
     effects = []
     for location in index['ebx'].values():
@@ -74,10 +124,25 @@ def discover(game):
 
 
 # ---------------- export ----------------
-def export(game, items, output):
+BFN_FOLLOW = ('EffectBlueprint', 'EmitterGraph', 'ScalableEmitterDocument', 'GpuRuntimeEmitterDocument')
+
+
+def export(game, items, output, names=None):
     kind = game_kind(game)
     if kind == 'bfn':
-        raise ValueError('Effects are not supported for Battle for Neighborville yet')
+        import bfn
+        if not names:
+            raise ValueError('Battle for Neighborville needs its type name table (--names)')
+        inventory = bfn.export(game, 'effects', output, bfn.key_from(None), names,
+                               int(os.environ.get('AURA_IMPORT_JOBS', '4')), bundles=[],
+                               extra_ebx=[i['asset'] for i in items], follow=BFN_FOLLOW)
+        wanted = {i['asset'].lower(): i for i in items}
+        for a in inventory['assets']:
+            if a.get('name', '').lower() in wanted:
+                a['item'] = wanted[a['name'].lower()]['name']
+        inventory['items'] = items
+        (Path(output) / 'inventory.json').write_text(json.dumps(inventory, indent=1), encoding='utf-8')
+        return inventory
     game, output = Path(game), Path(output)
     output.mkdir(parents=True, exist_ok=True)
     (output / 'ebx').mkdir(exist_ok=True)
@@ -698,6 +763,194 @@ def gpu_template(template):
     return t
 
 
+# ---------------- Battle for Neighborville emitter graphs ----------------
+class BfnConverter:
+    """The converter calls effect_data makes, served by the Battle for Neighborville level converter."""
+
+    def __init__(self, archive, textures, assets):
+        import convert_legacy
+        self.archive, self.assets = archive, Path(assets)
+        self.legacy = convert_legacy.LegacyConverter(archive, textures, assets, 'bfn')
+        self.volumes = {}
+
+    def texture(self, guid):
+        found = self.archive.by_guid.get(guid)
+        if not found or not found[1]['objects']:
+            return None
+        result, _ = self.legacy.texture_object(found[1]['objects'][0])
+        return result[0] if result else None
+
+    def convert_static(self, found, lod):
+        return self.legacy.mesh(found[0], found[1])[:2]
+
+    def volume(self, found):
+        """A 3D texture (the graphs' vector field) for the shaders to sample."""
+        import dxbc
+        import emitter_graph
+        guid = found[0]['guid']
+        if guid not in self.volumes:
+            self.volumes[guid] = None
+            rid = (found[1].get('Resource') or {}).get('$resource')
+            resource = self.archive.resources.get(rid)
+            if resource:
+                header = (self.archive.root / resource['path']).read_bytes()
+                # Exported headers are widened to the reader's layout: the chunk GUID moves from 32 to 36.
+                chunk = self.archive.chunks.get((header[36:52] if len(header) >= 144 else header[32:48]).hex())
+                if chunk:
+                    pixels = emitter_graph.volume_texture(header, (self.archive.root / chunk['path']).read_bytes(),
+                                                          _bc_colors, _bc3_alpha)
+                    self.volumes[guid] = dxbc.Texture(pixels)
+        return self.volumes[guid]
+
+
+TEXTURE_SKIP = ('normal', 'noise', 'distort', 'flow', 'gradient', 'erosion', 'mask', '_n_', 'vectorfield')
+EMISSIVE_HINTS = ('emissive', 'additive', 'blackbody', 'glow', 'fire', 'spark', 'ember', 'flash', 'electric', 'lightning')
+
+
+def _graph_texture(archive, converter, gdoc, graph):
+    """The graph's sprite: its first colour texture, and the flipbook it is cut into."""
+    shader = graph.get('Shader') or {}
+    picked = None
+    for param in shader.get('TextureParameters', []) or []:
+        found = archive.resolve(gdoc, param.get('Value'))
+        if not found or found[1].get('$type') != 'TextureAsset':
+            continue
+        label = ('%s %s' % (param.get('ParameterName', ''), found[1].get('Name', ''))).lower()
+        skip = any(k in label for k in TEXTURE_SKIP)
+        if picked is None or (picked[1] and not skip):
+            picked = (found, skip)
+    columns, rows = 1, 1
+    for param in shader.get('VectorParameters', []) or []:
+        if (param.get('ParameterName') or '').lower() in ('flipbooksize', 'flipbook', 'atlassize'):
+            v = param.get('Value') or {}
+            columns, rows = max(int(round(v.get('x', 1) or 1)), 1), max(int(round(v.get('y', 1) or 1)), 1)
+    texture = converter.texture(picked[0][0]['guid']) if picked else None
+    return texture, columns, rows
+
+
+def _euler_tracks(basis, transform):
+    """(n, keys, 9) Frostbite emitter-local rotations (left, up, forward axes) -> unwrapped XYZ Euler
+    angles of the same rotation in Blender's axes, which the add-on blends between keys."""
+    axis = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], float)
+    m = basis.reshape(basis.shape[:2] + (3, 3)).transpose(0, 1, 3, 2)  # the three axes as columns
+    m = m / np.maximum(np.linalg.norm(m, axis=2, keepdims=True), 1e-9)
+    m = np.asarray(transform, float)[:3, :3] @ m  # turned with the emitter
+    r = axis @ m @ axis.T
+    y = np.arcsin(np.clip(-r[..., 2, 0], -1, 1))
+    x = np.arctan2(r[..., 2, 1], r[..., 2, 2])
+    z = np.arctan2(r[..., 1, 0], r[..., 0, 0])
+    return np.unwrap(np.stack([x, y, z], -1), axis=1)
+
+
+def graph_emitter(archive, converter, doc, entity, index, name):
+    """An EmitterGraphEntityData simulated by its graph's own shaders, as a version 2 emitter."""
+    import emitter_graph
+    found = archive.resolve(doc, entity.get('EmitterGraph'))
+    if not found:
+        raise ValueError('emitter graph not exported')
+    gdoc, graph = found
+    graph = dict(graph)
+    mode = archive.resolve(gdoc, graph.get('SpawnMode'))
+    if mode:
+        graph['$spawn_mode'] = mode[1]
+    textures = {}
+    for key in ('SimulateComputeShaderData', 'SpawnComputeShaderData'):
+        for bound in (graph.get(key) or {}).get('RuntimeTextures', []) or []:
+            tex = archive.resolve(gdoc, bound.get('Texture'))
+            if tex and bound.get('TextureType') == 2:
+                volume = converter.volume(tex)
+                if volume is not None:
+                    textures[bound['BindPoint']] = volume
+    sim = emitter_graph.Graph(graph, entity, textures)
+    notes = ['simulated from the emitter graph shaders']
+    loop = sim.emitter_life <= 0 and not sim.burst
+    window = sim.emitter_life if sim.emitter_life > 0 else (LOOP_SECONDS if loop else 0.1)
+    seed = int(hashlib.sha1(('%s|%d' % (name, index)).encode()).hexdigest()[:6], 16) / float(1 << 24) * 100.0
+    out = sim.run(window, loop, seed, max_particles=MAX_PARTICLES, keys=KEYS)
+    n = len(out['spawn'])
+    delay = float(entity.get('StartDelay', 0) or 0)
+
+    def field(key, width, default):
+        v = out.get(key)
+        if v is None or not len(v):
+            return None
+        v = v[..., :width]
+        if v.shape[-1] < width:
+            v = np.concatenate([v, np.full(v.shape[:2] + (width - v.shape[-1],), default, np.float32)], -1)
+        return np.nan_to_num(v, nan=default, posinf=default, neginf=default)
+    position = field('Position', 3, 0.0)
+    if position is None:
+        position = np.zeros((n, KEYS, 3), np.float32)
+    mesh_found = archive.resolve(gdoc, graph.get('Mesh'))
+    override = (entity.get('EmitterGraphMesh') or {}).get('Mesh')
+    if override:
+        mesh_found = archive.resolve(doc, override) or mesh_found
+    mesh = None
+    if mesh_found and mesh_found[1].get('$type') in ('RigidMeshAsset', 'CompositeMeshAsset'):
+        try:
+            mesh = converter.convert_static(mesh_found, 0)
+        except Exception as error:  # a mesh that does not convert falls back to quads
+            notes.append('mesh particle not converted: %s' % error)
+    tracks = {}
+    if mesh and n and all(field(k, 3, 0.0) is not None for k in ('MatrixLeft', 'MatrixUp', 'MatrixForward')):
+        basis = np.concatenate([field(k, 3, 0.0) for k in ('MatrixLeft', 'MatrixUp', 'MatrixForward')], -1)
+        lengths = np.linalg.norm(basis.reshape(n, KEYS, 3, 3), axis=-1)  # |left|, |up|, |forward|
+        tracks['size_track'] = lengths[..., [0, 2, 1]]  # Blender's X, Y, Z are Frostbite's x, z, y
+        tracks['euler_track'] = _euler_tracks(basis, transform_matrix(entity.get('Transform')))
+    else:
+        scale = field('Scale', 2, 1.0)
+        if scale is None:
+            scale = field('SpawnSize', 2, 1.0)
+        if scale is None:
+            scale = np.ones((n, KEYS, 2), np.float32)
+        tracks['size_track'] = np.concatenate([scale, scale[..., :1]], -1)
+    rotation = field('Rotation', 1, 0.0)
+    angle = np.zeros((n, KEYS), np.float32) if rotation is None else rotation[..., 0]
+    if rotation is not None and np.abs(angle).max(initial=0) > 2 * math.pi * 1.25:
+        angle = np.radians(angle)  # graphs that spin in degrees
+    color = field('Color', 3, 1.0)
+    if color is None:
+        color = np.ones((n, KEYS, 3), np.float32)
+    color = np.maximum(color, 0)
+    if n and color.max() < 0.02:  # colour set when drawn, not simulated
+        color = np.ones_like(color)
+        notes.append('colour not simulated (drawn white)')
+    alpha = field('Alpha', 1, 1.0)
+    alpha = np.ones((n, KEYS), np.float32) if alpha is None else np.clip(alpha[..., 0], 0, 1)
+    peak = np.maximum(color.max(-1), 1e-6)
+    shader = archive.resolve(gdoc, (graph.get('Shader') or {}).get('Shader'))
+    shader_name = (shader[1].get('Name') or '').lower() if shader else ''
+    hinted = any(h in (shader_name + ' ' + name).lower() for h in EMISSIVE_HINTS)
+    emissive = hinted or (bool(n) and float(np.percentile(peak, 90)) > 1.5)
+    tracks['color_track'] = color / np.maximum(peak, 1.0)[..., None]
+    tracks['glow_track'] = np.where(peak > 1.0, 0.8 * np.sqrt(peak), 1.0)
+    tracks['alpha_track'] = alpha
+    texture, columns, rows = _graph_texture(archive, converter, gdoc, graph)
+    frames = columns * rows
+    anim = field('Animation', 1, 0.0)
+    if anim is not None and frames > 1:
+        cell = anim[..., 0]
+        tracks['cell_track'] = cell * frames if cell.max(initial=0) <= 1.0 else cell
+    if sim.burst:
+        notes.append('burst of %d' % sim.max_count)
+    duration = window if loop or sim.emitter_life > 0 else 0.0
+    particles = {
+        'spawn': (out['spawn'] + delay).round(4).tolist(), 'life': out['life'].round(4).tolist(),
+        'size': [1.0] * n, 'frame': [0.0] * n, 'tint': [[1.0, 1.0, 1.0]] * n, 'flip': [[0.0, 0.0]] * n,
+        'track': position.round(4).tolist(), 'angle': np.asarray(angle).round(4).tolist()}
+    for key, value in tracks.items():
+        particles[key] = np.asarray(value, np.float32).round(4).tolist()
+    return {
+        'name': name, 'kind': 'mesh' if mesh else 'quad', 'transform': transform_matrix(entity.get('Transform')),
+        'delay': delay, 'loop': loop, 'duration': duration, 'alignment': 0, 'align': 'camera', 'stretch': 0.0,
+        'stretch_clamp': 100.0, 'stretch_relative_clamp': 100.0, 'world_up': [0.0, 1.0, 0.0], 'emissive': bool(emissive),
+        'texture': texture, 'soft': texture is None, 'mesh': mesh[0] if mesh else None,
+        'materials': mesh[1] if mesh else [], 'frames': frames, 'columns': columns, 'anim_speed': 0.0, 'anim_on_life': False,
+        'curves': {'size': None, 'size_x': None, 'size_y': None, 'alpha': None, 'color': [[1.0, 1.0, 1.0]] * SAMPLES},
+        'particles': particles, 'notes': notes + sim.notes,
+    }
+
+
 def transform_matrix(transform):
     from convert import matrix
     return matrix(transform or {}).tolist()
@@ -745,6 +998,11 @@ def effect_data(archive, converter, doc, name, seen=None):
             if not template:
                 continue
             ename = next((a['name'] for a, d in archive.documents.values() if d is edoc), 'emitter_%d' % i)
+            if isinstance(converter, BfnConverter) and ename.lower().endswith('/gw2_emitterdocument'):
+                note = 'placeholder emitters skipped'  # every classic emitter in BFN points at this one stub
+                if note not in out['notes']:
+                    out['notes'].append(note)
+                continue
             if 'distortion' in ename.lower() or 'refraction' in ename.lower():
                 out['notes'].append('%s: heat distortion not ported' % ename.split('/')[-1])
                 continue
@@ -761,7 +1019,15 @@ def effect_data(archive, converter, doc, name, seen=None):
                 out['emitters'].append(data)
             except Exception as error:  # one emitter must not lose the effect
                 out['notes'].append('%s: %s' % (ename.split('/')[-1], error))
-        elif kind in ('LightEffectEntityData', 'PbrSphereLightEntityData', 'PointLightEntityData', 'SpotLightEntityData'):
+        elif kind == 'EmitterGraphEntityData':
+            found = archive.resolve(doc, entity.get('EmitterGraph'))
+            gname = next((a['name'] for a, d in archive.documents.values() if found and d is found[0]), 'graph_%d' % i)
+            try:
+                out['emitters'].append(graph_emitter(archive, converter, doc, entity, i, gname.split('/')[-1]))
+            except Exception as error:  # one emitter must not lose the effect
+                out['notes'].append('%s: %s' % (gname.split('/')[-1], error))
+        elif kind in ('LightEffectEntityData', 'PbrSphereLightEntityData', 'PointLightEntityData', 'SpotLightEntityData',
+                      'PbrSpotLightEntityData', 'PbrRectangularLightEntityData'):
             out['lights'].append(light_data(archive, doc, entity))
         elif kind == 'SoundEffectEntityData':
             out['notes'].append('sound not ported')
@@ -787,11 +1053,16 @@ def _reach(data):
 
 # ---------------- conversion ----------------
 def convert(export_dir, textures, assets, out, gap=1.0):
-    import gw2_convert
     export_dir, out, assets = Path(export_dir), Path(out), Path(assets)
     inventory = json.loads((export_dir / 'inventory.json').read_text(encoding='utf-8'))
-    archive = gw2_convert.Gw2Archive(export_dir)
-    converter = gw2_convert.Gw2Converter(archive, textures, assets)
+    if inventory.get('profile') == 'bfn':
+        from convert import Archive
+        archive = Archive(export_dir)
+        converter = BfnConverter(archive, textures, assets)
+    else:
+        import gw2_convert
+        archive = gw2_convert.Gw2Archive(export_dir)
+        converter = gw2_convert.Gw2Converter(archive, textures, assets)
     wanted = {i['asset'].lower(): i for i in inventory.get('items', [])}
     places, errors = [], []
     x = 0.0
@@ -842,7 +1113,7 @@ def main():
     if a.action == 'discover':
         Path(a.out).write_text(json.dumps(discover(a.game), indent=1), encoding='utf-8')
     elif a.action == 'export':
-        export(a.game, json.loads(Path(a.items).read_text(encoding='utf-8')), a.out)
+        export(a.game, json.loads(Path(a.items).read_text(encoding='utf-8')), a.out, a.names)
     else:
         scene, report = convert(a.export, a.textures, a.assets, a.out)
         print('Effects:', report['effects'], 'errors:', len(report['errors']))

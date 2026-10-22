@@ -6,8 +6,14 @@ The group takes the game's textures as they are and does what GW2's GBuffer shad
   ETT      R emissive mask, B tint mask: colour = lerp(Color, Color * Tint, ETT.B) (Velvet: ETT.G, repacked)
   Edge     colour = lerp(Color, Color * Edge_Tint, (1 - N.V) ^ Edge_Tint_Exponent * AO * mask), white = off;
            Velvet masks it with Detail_Map.R (tiled by Detail_UV_Tiling) and ETT.B
+  Goop     g = max(SuperGooped, Gooped, DirtGooped) * Goop_Mask.R; smoothness = lerp(ASM.G, 0.386, g);
+           colour = lerp(colour + Buff_Colour * Buff_Strength * 0.67 * min((1.001 - N.V) ^ 0.05, 1), goop colour, g)
+           (green when SuperGooped, brown and scaled by saturate((MuckBuff_Strength - 0.8) * 5) when DirtGooped,
+           else purple). These are gameplay states, all 0 in the materials, so the group inputs start off.
 Citron's peel shader has its own small group in front ("PVZ GW2 Citron"): where Color.A is 0 the flesh shows
-through, roughly Color * Color * ice depth, which turns the pale texture deep orange as in the game.
+through, roughly Color * Color * ice depth, which turns the pale texture deep orange as in the game. The flesh
+texture is read twice, the second time shifted by a parallax offset ("PVZ GW2 Citron Parallax").
+Emissive_Sequence shaders light Color by a Light_Mask strip whose cell moves with time ("PVZ GW2 Light Sequence").
 Every GW2 material uses the same group, so EEVEE compiles one shader for all of them, and each material's
 values sit on the group node where they can be changed. Specular_Masks shaders (R smoothness, B tint mask)
 are repacked into ASM/ETT outside the group. Prop shaders pick tint and emissive colours by UV quadrant.
@@ -17,8 +23,12 @@ import bpy
 from .materials import placeholder
 
 GROUP = 'PVZ GW2 Generic'
-VERSION = 3
+VERSION = 4
 CITRON = 'PVZ GW2 Citron'
+CITRON_PARALLAX = 'PVZ GW2 Citron Parallax'
+SEQUENCE = 'PVZ GW2 Light Sequence'
+GOOP = {'Super Gooped': 'SuperGooped', 'Gooped': 'Gooped', 'Dirt Gooped': 'DirtGooped',
+        'Buff Strength': 'Buff_Strength', 'Muck Buff Strength': 'MuckBuff_Strength'}
 QUADRANT_TINT = ('TintColour_Q1', 'TintColour_Q2', 'TintColour_Q3', 'TintColour_Q4')
 QUADRANT_EMISSIVE = ('EmissiveColour_Q1', 'EmissiveColour_Q2', 'EmissiveColour_Q3', 'EmissiveColour_Q4')
 
@@ -42,6 +52,13 @@ INPUTS = [
     ('Colour AO Strength', 'NodeSocketFloat', 0.35),     # the game only dims ambient light with AO
     ('Reflection AO Strength', 'NodeSocketFloat', 1.0),
     ('Alpha Cutoff', 'NodeSocketFloat', -1.0),          # below 0: opaque
+    ('Goop Mask', 'NodeSocketFloat', 1.0),
+    ('Super Gooped', 'NodeSocketFloat', 0.0),
+    ('Gooped', 'NodeSocketFloat', 0.0),
+    ('Dirt Gooped', 'NodeSocketFloat', 0.0),
+    ('Muck Buff Strength', 'NodeSocketFloat', 0.0),
+    ('Buff Colour', 'NodeSocketColor', (0, 0, 0, 1)),
+    ('Buff Strength', 'NodeSocketFloat', 0.0),
 ]
 TIPS = {
     'ETT': 'R emissive mask, B tint mask',
@@ -52,6 +69,12 @@ TIPS = {
     'Detail Map': 'Velvet detail: red channel masks the edge tint',
     'Emission Mode': '0: ETT red masks the emission. 1: the whole surface glows',
     'Alpha Cutoff': 'Alpha test threshold. Below 0 the surface is opaque',
+    'Goop Mask': 'Where goop can cover the surface (Goop_Mask red)',
+    'Super Gooped': 'Above 0: green goop (Super Goop) over the masked surface',
+    'Gooped': 'Above 0: purple goop over the masked surface',
+    'Dirt Gooped': 'Above 0: brown muck, faded in by Muck Buff Strength from 0.8 to 1',
+    'Buff Colour': 'Rim glow colour added while buffed',
+    'Buff Strength': 'How strong the buff rim glow is. 0: off',
 }
 
 
@@ -160,7 +183,22 @@ def group():
     colour = t.mix(colour, t.mix(colour, gi['Edge Tint Colour'], 1.0, 'MULTIPLY', 200), amount, x=250, clamp=True)
     edge = t.mix(colour, plain, 1.0, 'SUBTRACT', 300, clamp=True)
     colour = t.mix(colour, t.mix(colour, gi['Tint Colour'], 1.0, 'MULTIPLY', 300), ett['Blue'], x=350)
-    colour = t.mix(colour, ao, 1.0, 'MULTIPLY', 400)
+
+    # Goop and buff, gameplay states that start off: the buff adds a rim glow, then goop covers the masked surface.
+    buff_rim = t.math('MINIMUM', t.math('POWER', t.math('ADD', facing, 0.001, x=100), 0.05, x=150), 1.0, x=200)
+    buff = t.math('MULTIPLY', t.math('MULTIPLY', buff_rim, gi['Buff Strength'], x=250), 0.67, x=300)
+    colour = t.mix(colour, gi['Buff Colour'], buff, 'ADD', 380)
+    goop = t.math('MULTIPLY', t.math('MAXIMUM', t.math('MAXIMUM', gi['Super Gooped'], gi['Gooped'], x=-1200),
+                                     gi['Dirt Gooped'], x=-1100), gi['Goop Mask'], x=-1000)
+    dirt = t.math('GREATER_THAN', gi['Dirt Gooped'], 0.0, x=-1100)
+    muck = t.math('MULTIPLY', goop, t.math('MULTIPLY_ADD', gi['Muck Buff Strength'], 5.0, -4.0, x=-1000, clamp=True), x=-900)
+    covered = t.math('MULTIPLY_ADD', dirt, t.math('SUBTRACT', muck, goop, x=-800), goop, x=-700)
+    goop_colour = t.mix((0.286, 0.016, 0.619, 1), (0.154, 0.73, 0.007, 1),
+                        t.math('GREATER_THAN', gi['Super Gooped'], 0.0, x=-1100), x=-700)
+    goop_colour = t.mix(goop_colour, (0.445201, 0.176755, 0.039334, 1), dirt, x=-600)
+    colour = t.mix(colour, goop_colour, covered, x=420)
+    smoothness = t.math('MULTIPLY_ADD', goop, t.math('SUBTRACT', 0.386429, asm['Green'], x=-1200), asm['Green'], x=-1100)
+    colour = t.mix(colour, ao, 1.0, 'MULTIPLY', 460)
 
     # Emission: ETT red masks the emissive colour (mode 0) or the whole surface glows (mode 1).
     mask = t.math('MAXIMUM', ett['Red'], t.math('MINIMUM', gi['Emission Mode'], 1.0, x=-1200), x=-1000)
@@ -172,7 +210,7 @@ def group():
 
     bsdf = t.new('ShaderNodeBsdfPrincipled', 600)
     t.set(bsdf.inputs['Base Color'], colour)
-    t.set(bsdf.inputs['Roughness'], t.math('SUBTRACT', 1.0, asm['Green'], x=-1000))
+    t.set(bsdf.inputs['Roughness'], t.math('SUBTRACT', 1.0, smoothness, x=-1000))
     t.set(bsdf.inputs['Metallic'], asm['Blue'])
     t.set(bsdf.inputs['Specular IOR Level'], t.math('MULTIPLY', reflection_ao, 0.5, x=-800))
     t.set(bsdf.inputs['Normal'], normal)
@@ -189,31 +227,118 @@ CITRON_INPUTS = [
     ('Color', 'NodeSocketColor', (1, 1, 1, 1)),
     ('Peel Mask', 'NodeSocketFloat', 1.0),           # Color alpha: 1 peel, 0 see-through flesh
     ('Pulp', 'NodeSocketFloat', 0.25),               # Material2_Color alpha
+    ('Parallax Pulp', 'NodeSocketFloat', 0.25),      # Material2_Color alpha at the parallax-shifted UV
     ('AO', 'NodeSocketFloat', 1.0),
     ('Edge Tint', 'NodeSocketColor', (1, 1, 1, 1)),
     ('Edge Exponent', 'NodeSocketFloat', 6.0),
-    ('Parallax Tint', 'NodeSocketColor', (0, 0, 0, 1)),
-    ('Ice Depth Exponent', 'NodeSocketFloat', 0.0),
-    ('Ice Depth Min', 'NodeSocketFloat', 0.2),
+    # The defaults below are the shader's own, for values the materials leave out.
+    ('Parallax Tint', 'NodeSocketColor', (.35, .35, .35, 1)),
+    ('Ice Depth Exponent', 'NodeSocketFloat', 1.0),
+    ('Ice Depth Min', 'NodeSocketFloat', 0.0),
     ('Ice Depth 2 Exponent', 'NodeSocketFloat', 1.0),
-    ('Ice Depth 2 Min', 'NodeSocketFloat', 0.13),
+    ('Ice Depth 2 Min', 'NodeSocketFloat', 0.0),
+]
+CITRON_PARALLAX_INPUTS = [
+    ('UV', 'NodeSocketVector', (0, 0, 0)),
+    ('Pulp', 'NodeSocketFloat', 0.25),
+    ('Color Red', 'NodeSocketFloat', 1.0),
+    ('Parallax Height', 'NodeSocketFloat', 0.1),
+    ('Parallax Height Blend', 'NodeSocketFloat', 0.263),
+    ('Parallax Scale', 'NodeSocketFloat', 0.1),
+]
+SEQUENCE_INPUTS = [
+    ('UV', 'NodeSocketVector', (0, 0, 0)),
+    ('Rows', 'NodeSocketFloat', 1.0),
+    ('Columns', 'NodeSocketFloat', 1.0),
+    ('Blink Speed', 'NodeSocketFloat', 4.0),
 ]
 
 
+def _new_group(name, inputs, outputs):
+    tree = bpy.data.node_groups.new(name, 'ShaderNodeTree')
+    tree['frostbite_version'] = VERSION
+    for socket_name, kind, default in inputs:
+        tree.interface.new_socket(socket_name, in_out='INPUT', socket_type=kind).default_value = default
+    for socket_name, kind in outputs:
+        tree.interface.new_socket(socket_name, in_out='OUTPUT', socket_type=kind)
+    return tree
+
+
+def citron_parallax_group():
+    """The Citron shader's flesh UV: the Material2_Color lookup moves along the view, by how deep the flesh is.
+      h  = lerp(pulp, C.r, Parallax_Height_Blend)
+      uv = uv + view.xy * (2 * h * Parallax_Height - 1) * Parallax_Scale     view in tangent space
+    """
+    found = bpy.data.node_groups.get(CITRON_PARALLAX)
+    if found and found.get('frostbite_version') == VERSION:
+        return found
+    tree = _new_group(CITRON_PARALLAX, CITRON_PARALLAX_INPUTS, [('UV', 'NodeSocketVector')])
+    t = _Builder(tree)
+    gi = t.new('NodeGroupInput', -1000).outputs
+    height = t.math('MULTIPLY_ADD', t.math('SUBTRACT', gi['Color Red'], gi['Pulp'], x=-800), gi['Parallax Height Blend'],
+                    gi['Pulp'], x=-700)
+    depth = t.math('MULTIPLY', t.math('MULTIPLY_ADD', t.math('MULTIPLY', height, gi['Parallax Height'], x=-600), 2.0, -1.0,
+                                      x=-500), gi['Parallax Scale'], x=-400)
+    # Tangent space in Blender's UV directions: U along the tangent, V along normal x tangent.
+    geometry = t.new('ShaderNodeNewGeometry', -800)
+    tangent = t.new('ShaderNodeTangent', -800, direction_type='UV_MAP')
+    bitangent = t.vec('CROSS_PRODUCT', geometry.outputs['Normal'], tangent.outputs['Tangent'], -600)
+    view = geometry.outputs['Incoming']
+    offset = t.new('ShaderNodeCombineXYZ', -400)
+    t.set(offset.inputs['X'], t.vec('DOT_PRODUCT', view, tangent.outputs['Tangent'], -500))
+    t.set(offset.inputs['Y'], t.vec('DOT_PRODUCT', view, bitangent, -500))
+    uv = t.vec('ADD', gi['UV'], t.vec('SCALE', offset.outputs[0], depth, -300), -200)
+    t.set(t.new('NodeGroupOutput', 0).inputs['UV'], uv)
+    return tree
+
+
+def sequence_group():
+    """PBR_Character_Main_Emissive_Sequence's Light_Mask UV: a strip of Rows x Columns cells stepped through in time.
+      frame = ceil((seconds mod 10) * Lights_Blink_Speed)
+      uv    = uv + (floor(frame / Columns) / Rows, frame / Columns)      (Frostbite's V; Blender's runs the other way)
+    Seconds come from the scene frame through a driver.
+    """
+    found = bpy.data.node_groups.get(SEQUENCE)
+    if found and found.get('frostbite_version') == VERSION:
+        return found
+    tree = _new_group(SEQUENCE, SEQUENCE_INPUTS, [('UV', 'NodeSocketVector')])
+    t = _Builder(tree)
+    gi = t.new('NodeGroupInput', -1000).outputs
+    seconds = t.new('ShaderNodeValue', -1000, label='Seconds (driven by the frame)')
+    seconds.name = 'Seconds'
+    fcurve = seconds.outputs[0].driver_add('default_value')
+    driver = fcurve.driver
+    driver.type = 'SCRIPTED'
+    for name, path in (('fps', 'render.fps'), ('base', 'render.fps_base')):
+        var = driver.variables.new()
+        var.name, var.type = name, 'SINGLE_PROP'
+        var.targets[0].id_type = 'SCENE'
+        var.targets[0].id = bpy.context.scene
+        var.targets[0].data_path = path
+    driver.expression = 'frame * base / fps'
+    frame = t.math('CEIL', t.math('MULTIPLY', t.math('MODULO', seconds.outputs[0], 10.0, x=-800), gi['Blink Speed'],
+                                     x=-700), x=-600)
+    cell = t.math('DIVIDE', frame, gi['Columns'], x=-500)
+    offset = t.new('ShaderNodeCombineXYZ', -300)
+    t.set(offset.inputs['X'], t.math('DIVIDE', t.math('FLOOR', cell, x=-400), gi['Rows'], x=-350))
+    t.set(offset.inputs['Y'], t.math('MULTIPLY', cell, -1.0, x=-400))
+    t.set(t.new('NodeGroupOutput', 0).inputs['UV'], t.vec('ADD', gi['UV'], offset.outputs[0], -200))
+    return tree
+
+
 def citron_group():
-    """PBR_Character_Main_Citron's colour, read from its GBuffer shader (parallax offset left out):
-      inner  = lerp(Parallax_Tint * pulp, lerp(C, max(pulp, C), pulp), pulp)
+    """PBR_Character_Main_Citron's colour, read from its GBuffer shader:
+      tint   = Parallax_Tint * pulp'                                         pulp' read at the parallax UV
+      inner  = lerp(tint, lerp(C, max(pulp, C), pulp), pulp)
       edged  = lerp(C, C * Edge_Tint, f ^ Edge_Tint_Exponent * AO)          f = 1 - N.V
-      colour = lerp(edged * inner * (f ^ Ice_Depth_Exponent + Ice_Depth_min), C, C.a) + (f ^ Ice_Depth2 + Ice_Depth2_min) * C
+      colour = lerp(edged * (inner * (f ^ Ice_Depth_Exponent + Ice_Depth_min) + tint), C, C.a)
+               + (f ^ Ice_Depth2 + Ice_Depth2_min) * C
+      glow   = tint * (1 - C.a), added to ETT.R before the emissive colour multiplies them
     """
     found = bpy.data.node_groups.get(CITRON)
     if found and found.get('frostbite_version') == VERSION:
         return found
-    tree = bpy.data.node_groups.new(CITRON, 'ShaderNodeTree')
-    tree['frostbite_version'] = VERSION
-    for name, kind, default in CITRON_INPUTS:
-        tree.interface.new_socket(name, in_out='INPUT', socket_type=kind).default_value = default
-    tree.interface.new_socket('Colour', in_out='OUTPUT', socket_type='NodeSocketColor')
+    tree = _new_group(CITRON, CITRON_INPUTS, [('Colour', 'NodeSocketColor'), ('Glow', 'NodeSocketColor')])
     t = _Builder(tree)
     gi = t.new('NodeGroupInput', -1200).outputs
     c, pulp = gi['Color'], gi['Pulp']
@@ -221,15 +346,19 @@ def citron_group():
     f = t.math('SUBTRACT', 1.0, t.vec('DOT_PRODUCT', geometry.outputs['Normal'], geometry.outputs['Incoming'], -1000),
                x=-900, clamp=True)
     raised = t.mix(c, t.mix(c, pulp, 1.0, 'LIGHTEN', -800), pulp, x=-700)
-    inner = t.mix(t.mix(gi['Parallax Tint'], pulp, 1.0, 'MULTIPLY', -800), raised, pulp, x=-600)
+    tint = t.mix(gi['Parallax Tint'], gi['Parallax Pulp'], 1.0, 'MULTIPLY', -800)
+    inner = t.mix(tint, raised, pulp, x=-600)
     rim = t.math('MULTIPLY', t.math('POWER', f, gi['Edge Exponent'], x=-800), gi['AO'], x=-700)
     edged = t.mix(c, t.mix(c, gi['Edge Tint'], 1.0, 'MULTIPLY', -700), rim, x=-600)
     ice = t.math('ADD', t.math('POWER', f, gi['Ice Depth Exponent'], x=-800), gi['Ice Depth Min'], x=-700)
-    flesh = t.mix(t.mix(edged, inner, 1.0, 'MULTIPLY', -500), ice, 1.0, 'MULTIPLY', -400)
+    depth = t.mix(t.mix(inner, ice, 1.0, 'MULTIPLY', -500), tint, 1.0, 'ADD', -450)
+    flesh = t.mix(edged, depth, 1.0, 'MULTIPLY', -400)
     colour = t.mix(flesh, c, gi['Peel Mask'], x=-300)
     ice2 = t.math('ADD', t.math('POWER', f, gi['Ice Depth 2 Exponent'], x=-800), gi['Ice Depth 2 Min'], x=-700)
     colour = t.mix(colour, t.mix(c, ice2, 1.0, 'MULTIPLY', -400), 1.0, 'ADD', -200, clamp=True)
-    t.set(t.new('NodeGroupOutput', 0).inputs['Colour'], colour)
+    go = t.new('NodeGroupOutput', 0).inputs
+    t.set(go['Colour'], colour)
+    t.set(go['Glow'], t.mix(tint, (0, 0, 0, 1), gi['Peel Mask'], x=-300))
     return tree
 
 
@@ -329,8 +458,32 @@ def build(mat, doc, image):
     t.set(gin['Tint Colour'], tint)
     emissive = by_quadrant(QUADRANT_EMISSIVE, ('Emissive_Color', 'Param_Emissive_Color'), (0.0, 0.0, 0.0, 1.0))
     t.set(gin['Emission Colour'], emissive)
+    sequence = 'Lights_Blink_Speed' in vectors or doc.get('shader_name', '').endswith('_Emissive_Sequence')
+    if sequence and base:
+        # Emissive_Sequence: emission = Color * Light_Mask.R (at the time-stepped cell) * Emissive_Color^2, ETT.R masked.
+        seq = t.new('ShaderNodeGroup', -1150, label='Light sequence')
+        seq.node_tree = sequence_group()
+        t.set(seq.inputs['UV'], tile.outputs['Vector'])
+        for socket, name in (('Rows', 'Lights_Texture_Rows'), ('Columns', 'Lights_Texture_Columns'),
+                             ('Blink Speed', 'Lights_Blink_Speed')):
+            if name in vectors:
+                seq.inputs[socket].default_value = vectors[name][0]
+        lights = texture('light_mask', True, 'Light_Mask (sequence)', seq.outputs['UV'])
+        if lights and isinstance(emissive, tuple):
+            squared = tuple(v * v for v in emissive[:3]) + (1.0,)
+            lit = t.mix(t.mix(base.outputs['Color'], squared, 1.0, 'MULTIPLY', -450), t.split(lights, -600)['Red'],
+                        1.0, 'MULTIPLY', -300)
+            t.set(gin['Emission Colour'], lit)
+    for socket, name in GOOP.items():
+        if name in vectors:
+            gin[socket].default_value = vectors[name][0]
+    if 'Buff_Colour' in vectors:
+        gin['Buff Colour'].default_value = rgba('Buff_Colour', (0.0, 0.0, 0.0))
+    goop = texture('Goop_Mask', True, 'Goop_Mask (red)')
+    if goop:
+        t.set(gin['Goop Mask'], t.split(goop, -600)['Red'])
 
-    edge = vectors.get('Edge_Tint') or vectors.get('Edge_Tint2')
+    edge =vectors.get('Edge_Tint') or vectors.get('Edge_Tint2')
     exponent = vectors.get('Edge_Tint_Exponent') or vectors.get('Edge_Tint_Exponent2')
     citron = 'Ice_Depth2_min' in vectors or doc.get('shader_name', '').endswith('_Citron')
     if citron and base:
@@ -343,10 +496,28 @@ def build(mat, doc, image):
         if asm:
             t.set(ice.inputs['AO'], t.split(asm, -600)['Red'])
         scale = (vectors.get('Parallax_UV_Scale') or [1.0])[0] or 1.0
-        pulp = texture('Material2_Color', False, 'Material2_Color (pulp in alpha)',
-                       t.vec('SCALE', tile.outputs['Vector'], scale, -1000))
+        pulp_uv = t.vec('SCALE', tile.outputs['Vector'], scale, -1000)
+        pulp = texture('Material2_Color', False, 'Material2_Color (pulp in alpha)', pulp_uv)
         if pulp:
+            # The flesh read again, shifted by how deep it is along the view.
+            parallax = t.new('ShaderNodeGroup', -700, label='Citron parallax')
+            parallax.node_tree = citron_parallax_group()
+            t.set(parallax.inputs['UV'], pulp_uv)
+            t.set(parallax.inputs['Pulp'], pulp.outputs['Alpha'])
+            t.set(parallax.inputs['Color Red'], t.split(base, -600)['Red'])
+            for socket, name in (('Parallax Height', 'Parallax_Height'), ('Parallax Height Blend', 'Parallax_Height_Blend'),
+                                 ('Parallax Scale', 'Parallax_Scale')):
+                if name in vectors:
+                    parallax.inputs[socket].default_value = vectors[name][0]
+            shifted = texture('Material2_Color', False, 'Material2_Color at the parallax UV', parallax.outputs['UV'])
             t.set(ice.inputs['Pulp'], pulp.outputs['Alpha'])
+            t.set(ice.inputs['Parallax Pulp'], shifted.outputs['Alpha'])
+        # Emission: (glow + ETT.R) x the emissive colour, so the whole surface takes part.
+        glow = ice.outputs['Glow']
+        if ett:
+            glow = t.mix(glow, t.split(ett, -600)['Red'], 1.0, 'ADD', -300)
+        t.set(gin['Emission Colour'], t.mix(glow, emissive, 1.0, 'MULTIPLY', -250))
+        gin['Emission Mode'].default_value = 1
         if edge:
             ice.inputs['Edge Tint'].default_value = (*edge[:3], 1.0)
         if exponent:

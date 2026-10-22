@@ -170,11 +170,47 @@ def with_models(result):
     return result
 
 
+# Facial clips: GW1/GW2 keep small clips on a character's face bones (Soldier_Face_Idle, Rose_Idle_Face),
+# BFN talk clips (..._NPC_Talk_Mouth_Open) that move the face with the body.
+FACE_BONE = re.compile(r'face|eye|brow|lid|mouth|cheek|jaw|lip|nose|nostril|tongue|teeth|tooth', re.I)
+BODY_BONE = re.compile(r'^(hips|pelvis|spine|trajectory|connect|root|reference)', re.I)
+FACE_CLIP = re.compile(r'face|mouth|talk|lip|blink|viseme', re.I)
+INDEX_VERSION = 2
+
+
+def face_kind(name, ordered):
+    """(face, face_only): a facial clip, and one that drives only face bones (laid over a body clip)."""
+    bones = {n.rsplit('.', 1)[0] if n[-2:] in ('.q', '.t', '.s') else n for n, _, _ in ordered}
+    bones.discard('AITrajectory')
+    on_face = sum(1 for b in bones if FACE_BONE.search(b))
+    face_only = bool(bones) and on_face >= 0.75 * len(bones) and not any(BODY_BONE.search(b) for b in bones)
+    return face_only or bool(FACE_CLIP.search(name or '')), face_only
+
+
+def sharing_rigs(db, anim, rig):
+    """Other rigs with the face layout a face clip targets (GW1's zombie classes share one face)."""
+    clip = db.clips_of.get(anim['__guid']) or {}
+    target = db.get(clip.get('Target'))
+    if target is None or target['__type'] != 'LayoutHierarchyAsset':
+        return []
+    layouts = set(target.get('LayoutAssets') or [])
+    out = []
+    for r in db.rigs:
+        root = db.get((r.get('DofSetLists') or [None])[0])
+        if r is rig or root is None or root['__guid'] == target['__guid']:
+            continue
+        if db._contains(root, target['__guid']) or (layouts and layouts <= set(root.get('LayoutAssets') or [])):
+            out.append(r)
+    return out
+
+
 def discover(game):
     kind = game_kind(game)
     index = cache_dir(game, kind) / 'clips.json'
     if index.is_file():
-        return with_models(json.loads(index.read_text(encoding='utf-8')))
+        cached = json.loads(index.read_text(encoding='utf-8'))
+        if cached.get('index') == INDEX_VERSION:
+            return with_models(cached)
     characters = {}
     for group in groups(game, kind):
         db = load(game, kind, group)
@@ -187,17 +223,20 @@ def discover(game):
                 continue
             if not rig or not ordered:
                 continue
-            entry = characters.setdefault(rig['__name'], {'rig': rig['__name'], 'name': character_of(rig['__name']),
-                                                          'clips': [], 'seen': set()})
             name = clean(db.clip_name(anim))
-            if name.lower() in entry['seen']:
-                continue  # the same clip in both platforms' banks
-            entry['seen'].add(name.lower())
-            entry['clips'].append({'name': name, 'key': anim['__guid'], 'frames': anim.get('NumKeys', 0),
-                                   'fps': fps, 'additive': bool(anim.get('Additive')), 'banks': group})
+            face, face_only = face_kind(name, ordered)
+            for owner in [rig] + (sharing_rigs(db, anim, rig) if face_only else []):
+                entry = characters.setdefault(owner['__name'], {'rig': owner['__name'], 'name': character_of(owner['__name']),
+                                                                'clips': [], 'seen': set()})
+                if name.lower() in entry['seen']:
+                    continue  # the same clip in both platforms' banks
+                entry['seen'].add(name.lower())
+                entry['clips'].append({'name': name, 'key': anim['__guid'], 'frames': anim.get('NumKeys', 0),
+                                       'fps': fps, 'additive': bool(anim.get('Additive')), 'banks': group,
+                                       'face': face, 'face_only': face_only})
     for entry in characters.values():
         entry.pop('seen')
-    result = {'game': kind, 'level': 'all levels' if kind == 'gw1' else level_for(game, kind),
+    result = {'index': INDEX_VERSION, 'game': kind, 'level': 'all levels' if kind == 'gw1' else level_for(game, kind),
               'characters': sorted((c for c in characters.values() if len(c['clips']) >= 3), key=lambda c: c['name'].lower())}
     for c in result['characters']:
         c['clips'].sort(key=lambda x: x['name'].lower())
@@ -225,7 +264,9 @@ def export(game, items, out):
         except Exception as error:  # one bad clip must not lose the others
             errors.append({'clip': item.get('name'), 'error': str(error)})
             continue
-        clip.update(format='aura-frostbite-animation', version=1, name=clean(clip['name']), game=kind)
+        face, face_only = face_kind(clip['name'], db.channels(anim, kind)[0])
+        clip.update(format='aura-frostbite-animation', version=1, name=clean(clip['name']), game=kind,
+                    face=face, face_only=face_only)
         path = out / (re.sub(r'[^\w.-]+', '_', clip['name'])[:80] + '.json')
         path.write_text(json.dumps(clip), encoding='utf-8')
         written.append(str(path))

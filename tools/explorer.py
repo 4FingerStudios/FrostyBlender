@@ -4,9 +4,14 @@ as a folder tree, with a look inside one file and an export of any selection.
     python explorer.py list --game GAME --out files.json
     python explorer.py inspect --game GAME --name PATH --reader READER --out info.json
     python explorer.py export --game GAME --items items.json --reader READER --dest FOLDER --out result.json
+    python explorer.py sounds --game GAME --out sounds.json
+    python explorer.py sound-export --game GAME --items names.json --dest FOLDER --out result.json
+    python explorer.py text --game GAME [--language LANG] --out strings.json
+    python explorer.py text-export --game GAME --dest FOLDER --out result.json
 
 Exports: EBX files as readable JSON plus the raw data, textures (UI art included) as PNG, atlas flipbooks as
-PNG, and other resources as their raw bytes with a fitting extension. Meshes go to Blender through the
+PNG, sounds (SoundWaveAsset) as WAV through audio.py, and other resources as their raw bytes with a fitting
+extension. The game's UI text, every language, goes to CSV and JSON through loc.py. Meshes go to Blender through the
 add-on's Props import instead. Battle for Neighborville EBX need the initfs key (AURA_BFN_KEY) and the type
 name table (--names) to become JSON; without them they are saved raw. Game files are only read.
 """
@@ -268,6 +273,7 @@ def export(game, items, reader, dest, size=2048):
     source = Source(game)
     dest = Path(dest)
     written, errors, textures = [], [], set()
+    chunks = None
     for item in items:
         name = item['name'] if isinstance(item, dict) else item
         base = dest / name.replace('\\', '/')
@@ -281,6 +287,10 @@ def export(game, items, reader, dest, size=2048):
                 if document is not None:
                     base.with_suffix('.json').write_text(json.dumps(document, indent=1), encoding='utf-8')
                     written.append(str(base.with_suffix('.json')))
+                if document is not None and document['root_type'] == 'SoundWaveAsset' and kind != 'bfn':
+                    import audio
+                    chunks = chunks or audio.Chunks(game)
+                    written += audio.export_sound(source, chunks, name, document['objects'][0], dest)
             resource = source.resource(name)
             if resource is not None:
                 content, rtype = resource
@@ -340,6 +350,9 @@ def inspect(game, name, reader):
             info['objects'] = len(document['objects'])
             info['fields'] = _summary(document['objects'][0]) if document['objects'] else {}
             info['imports'] = source.import_names(document)[:200]
+            if document['root_type'] == 'SoundWaveAsset' and kind != 'bfn':
+                import audio
+                info['sound'] = audio.describe(name, document['objects'][0], audio.Chunks(game))
         else:
             info['root_type'] = 'EBX (needs the BFN key in Blender to read)'
     resource = source.resource(name)
@@ -369,9 +382,34 @@ def inspect(game, name, reader):
     return info
 
 
+# ---------------- sounds and text ----------------
+def sounds(game):
+    """Every SoundWaveAsset with its kind (Voice, Music, Effect), duration, channels, codec and rate."""
+    import audio
+    return audio.listing(game)
+
+
+def export_sounds(game, names, dest):
+    """Chosen sounds as WAV files under dest, one per variation."""
+    import audio
+    return audio.export(game, names, dest)
+
+
+def text(game, language=None):
+    """The UI strings of one language, with their ID names where known, for browsing."""
+    import loc
+    return loc.browse(game, language)
+
+
+def export_text(game, dest):
+    """Every UI string, all languages, to strings.csv and strings.json under dest."""
+    import loc
+    return loc.export(game, dest)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    p.add_argument('action', choices=('list', 'inspect', 'export'))
+    p.add_argument('action', choices=('list', 'inspect', 'export', 'sounds', 'sound-export', 'text', 'text-export'))
     p.add_argument('--game', required=True)
     p.add_argument('--out', required=True)
     p.add_argument('--name')
@@ -379,15 +417,24 @@ def main():
     p.add_argument('--reader')
     p.add_argument('--dest')
     p.add_argument('--size', type=int, default=2048)
+    p.add_argument('--language')
     a = p.parse_args()
     if a.action == 'list':
         result = listing(a.game)
     elif a.action == 'inspect':
         result = inspect(a.game, a.name, a.reader)
+    elif a.action == 'sounds':
+        result = sounds(a.game)
+    elif a.action == 'sound-export':
+        result = export_sounds(a.game, json.loads(Path(a.items).read_text(encoding='utf-8')), a.dest)
+    elif a.action == 'text':
+        result = text(a.game, a.language)
+    elif a.action == 'text-export':
+        result = export_text(a.game, a.dest)
     else:
         items = json.loads(Path(a.items).read_text(encoding='utf-8'))
         result = export(a.game, items, a.reader, a.dest, a.size)
-    Path(a.out).write_text(json.dumps(result), encoding='utf-8')
+    Path(a.out).write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')
     return 0
 
 

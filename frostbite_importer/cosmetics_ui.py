@@ -3,9 +3,15 @@
 Items are converted in their bind pose at the origin, so a body, head and props chosen
 together line up on the character. With "Rig to skeleton" on they are also bound to one
 armature of the character's skeleton, ready to pose.
+
+Tattoos are material variations of the head or body: their textures are layered over the
+material's colour, and on a character already in the scene they replace that piece's
+materials instead of adding a second copy. Emotes are animation clips: each becomes an
+Action on the character's armature (and its controls, with the pro rig).
 """
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -138,6 +144,153 @@ class FROSTBITE_OT_cosmetics_clear(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def _socket(sockets, identifier):
+    return next(s for s in sockets if s.identifier == identifier)
+
+
+def _mix(tree, a, b, factor, x, y, label):
+    """A colour Mix node: a -> b by factor (sockets, or a colour / number for a constant)."""
+    mix = tree.nodes.new('ShaderNodeMix')
+    mix.data_type, mix.blend_type, mix.label, mix.location = 'RGBA', 'MIX', label, (x, y)
+    for identifier, value in (('A_Color', a), ('B_Color', b), ('Factor_Float', factor)):
+        socket = _socket(mix.inputs, identifier)
+        if isinstance(value, bpy.types.NodeSocket):
+            tree.links.new(value, socket)
+        else:
+            socket.default_value = value
+    return _socket(mix.outputs, 'Result_Color')
+
+
+def _layer_tattoo(mat, image):
+    """Lay a material's tattoo over its colour, as the games' tattoo shaders do: the Tattoo map's colour by its
+    alpha, then, for silver and gold designs, the Bling colour where Tattoo_BlingMask is white. A glowing design
+    (Emissive_Color_Tattoo) also emits under the tattoo. Returns whether the material has a tattoo."""
+    if mat.get('frostbite_tattoo') or not mat.get('frostbite_material') or not mat.use_nodes:
+        return False
+    assets = Path(mat.get('frostbite_assets', ''))
+    try:
+        doc = json.loads((assets / mat['frostbite_material']).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return False
+    named = doc.get('named_textures') or {}
+    base_rel = (doc.get('textures') or {}).get('base') or named.get('Color') or named.get('Diffuse')
+    if not named.get('Tattoo') or not base_rel:
+        return False
+    tree = mat.node_tree
+    wanted = os.path.normcase(str((assets / base_rel).resolve()))
+    base = next((n for n in tree.nodes if n.type == 'TEX_IMAGE' and n.image and n.image.filepath and
+                 os.path.normcase(os.path.abspath(bpy.path.abspath(n.image.filepath))) == wanted), None)
+    if base is None:
+        return False
+    coords = base.inputs['Vector'].links[0].from_socket if base.inputs['Vector'].is_linked else None
+    x, y = base.location.x, base.location.y
+
+    def texture(rel, non_color, label, dy):
+        img = image(rel, non_color)
+        if img is None:
+            return None
+        node = tree.nodes.new('ShaderNodeTexImage')
+        node.image, node.label, node.location, node.extension = img, label, (x, y + dy), base.extension
+        if coords:
+            tree.links.new(coords, node.inputs['Vector'])
+        return node
+    tattoo = texture(named['Tattoo'], False, 'Tattoo (alpha = coverage)', 300)
+    if tattoo is None:
+        return False
+    targets = [link.to_socket for link in base.outputs['Color'].links]
+    colour = _mix(tree, base.outputs['Color'], tattoo.outputs['Color'], tattoo.outputs['Alpha'], x + 300, y + 200, 'Tattoo')
+    mask = texture(named['Tattoo_BlingMask'], True, 'Tattoo_BlingMask', 600) if named.get('Tattoo_BlingMask') else None
+    bling = texture(named['Bling'], False, 'Bling (silver / gold)', 900) if named.get('Bling') and mask else None
+    if bling:
+        colour = _mix(tree, colour, bling.outputs['Color'], mask.outputs['Color'], x + 500, y + 200, 'Tattoo bling')
+        # Bling is polished metal: the GW2 shader's ASM (occlusion, smoothness, metal) goes metallic under the mask.
+        asm = next((i for n in tree.nodes if n.type == 'GROUP' for i in n.inputs if i.name == 'ASM'), None)
+        if asm is not None:
+            current = asm.links[0].from_socket if asm.is_linked else tuple(asm.default_value)
+            tree.links.new(_mix(tree, current, (1.0, 0.8, 1.0, 1.0), mask.outputs['Color'], x + 500, y - 100,
+                                'Tattoo bling metal'), asm)
+    for socket in targets:
+        tree.links.new(colour, socket)
+    glow = (doc.get('vectors') or {}).get('Emissive_Color_Tattoo')
+    emission = next((i for n in tree.nodes for i in n.inputs
+                     if i.name in ('Emission Colour', 'Emission Color') and n.type in ('GROUP', 'BSDF_PRINCIPLED')), None)
+    if glow and any(glow[:3]) and emission is not None:
+        current = emission.links[0].from_socket if emission.is_linked else tuple(emission.default_value)
+        tree.links.new(_mix(tree, current, (*glow[:3], 1.0), tattoo.outputs['Alpha'], x + 300, y + 500, 'Tattoo glow'),
+                       emission)
+        if emission.node.type == 'BSDF_PRINCIPLED' and 'Emission Strength' in emission.node.inputs:
+            emission.node.inputs['Emission Strength'].default_value = max(1.0, emission.node.inputs['Emission Strength'].default_value)
+    mat['frostbite_tattoo'] = named['Tattoo']
+    return True
+
+
+def _objects(collection):
+    out = list(collection.objects)
+    for child in collection.children:
+        out += _objects(child)
+    return out
+
+
+def _move_tattoos(context, root):
+    """A tattooed head or body already on a character in the scene takes the new materials, and the copy just
+    imported is removed. Returns how many pieces were retextured."""
+    new = _objects(root)
+    moved = 0
+    for ob in [o for o in new if o.type == 'MESH' and o.get('frostbite_source')]:
+        if not any(s.material and s.material.get('frostbite_tattoo') for s in ob.material_slots):
+            continue
+        twins = [o for o in context.scene.objects if o.type == 'MESH' and o not in new
+                 and o.get('frostbite_source') == ob['frostbite_source']]
+        for twin in twins:
+            for index, slot in enumerate(ob.material_slots):
+                if index < len(twin.material_slots):
+                    twin.material_slots[index].material = slot.material
+        if twins:
+            moved += len(twins)
+            bpy.data.objects.remove(ob)
+    return moved
+
+
+def _prune(collection):
+    """Remove collections left empty under (and including) `collection`; returns whether it was removed."""
+    for child in list(collection.children):
+        _prune(child)
+    if not collection.objects and not collection.children:
+        bpy.data.collections.remove(collection)
+        return True
+    return False
+
+
+def _character_armature(context, game, character):
+    """The armature of a character imported earlier: its rig file names the game and character."""
+    pattern = re.compile(r'/%s_%s(?:_\d+)?\.json$' % (re.escape(game.lower()), re.escape(character.lower())))
+    found = [o for o in context.scene.objects if o.type == 'ARMATURE' and pattern.search(o.get('frostbite_rig', '').lower())]
+    active = context.active_object
+    if active in found:
+        return active
+    return found[0] if found else (active if active and active.type == 'ARMATURE' else None)
+
+
+def _apply_clips(context, armature, paths):
+    """Each decoded emote clip as an Action on the armature (the pro rig's controls follow, see apply_clip);
+    the first one is left playing. Returns (done, problems)."""
+    from . import animation_import
+    first, done, problems = None, 0, []
+    for path in paths:
+        try:
+            action, _ = animation_import.apply_clip(context, armature, animation_import.load_clip(path))
+            action.use_fake_user = True
+            first = first or action
+            done += 1
+        except Exception as error:  # one bad clip must not lose the others
+            problems.append(str(error))
+    if first:
+        armature.animation_data.action = first  # each Action already holds its controls' keys
+        start, end = first.frame_range
+        context.scene.frame_start, context.scene.frame_end = int(start), max(int(end), int(start) + 1)
+    return done, problems
+
+
 def _poll():
     proc = _job.get('proc')
     if proc is None:
@@ -155,6 +308,7 @@ def _poll():
         _redraw()
         return 1.0
     label, rig, pro = _job['label'], _job.get('rig', True), _job.get('pro', False)
+    game, character = _job.get('game', ''), _job.get('character', '')
     _job.clear()
     try:
         result = json.loads((job / 'result.json').read_text(encoding='utf-8'))
@@ -166,9 +320,20 @@ def _poll():
         importer = scene_import.Importer(result['scene'], Path(result['assets']), False, True,
                                          report=lambda level, text: print('Frostbite cosmetics:', text),
                                          rig=rig)
-        root = importer.run(bpy.context)
-        if root is not None:
-            root.name = label
+        root, tattoo_note = None, ''
+        if result.get('meshes'):  # an emotes-only import has no meshes
+            root = importer.run(bpy.context)
+            tattooed = sum(_layer_tattoo(m, importer.image) for m in importer.materials.values() if m)
+            moved = _move_tattoos(bpy.context, root) if tattooed else 0
+            if moved and not any(o.type in ('MESH', 'ARMATURE') for o in _objects(root)):
+                for ob in _objects(root):  # only the lighting is left: the character already has its own
+                    bpy.data.objects.remove(ob)
+            if moved:
+                tattoo_note = ', tattoo applied to %d piece%s in the scene' % (moved, 's' if moved > 1 else '')
+            elif tattooed:
+                tattoo_note = ', %d tattooed' % tattooed
+            if not _prune(root):
+                root.name = label
         pro_note = ''
         if importer.armatures:
             from . import rig_tools
@@ -189,10 +354,20 @@ def _poll():
                     except Exception as error:  # the import itself is done; report the rig separately
                         pro_note = ', pro rig failed: %s' % error
                         print('Frostbite pro rig failed on %s: %s' % (armature.name, error))
+        clip_note = ''
+        if result.get('clips'):  # emotes: onto the character just imported, or the one already in the scene
+            armature = next((o for o, _ in importer.armatures.values()), None) or _character_armature(bpy.context, game, character)
+            if armature is None:
+                clip_note = ', emotes not applied: import the character with "Rig to skeleton" first'
+            else:
+                done, problems = _apply_clips(bpy.context, armature, result['clips'])
+                clip_note = ', %d emote%s on %s%s' % (done, '' if done == 1 else 's', armature.name,
+                                                      ' (%d failed: %s)' % (len(problems), problems[0]) if problems else '')
         note = ' (%d converter errors)' % result['errors'] if result.get('errors') else ''
         if state:
             rigged = ', rigged to %s' % ', '.join(o.name for o, _ in importer.armatures.values()) if importer.armatures else ''
-            state.status = 'Done: %d meshes%s%s%s' % (len(importer.meshes), rigged, pro_note, note)
+            meshes = '%d meshes' % len(importer.meshes) if result.get('meshes') else 'no meshes'
+            state.status = 'Done: %s%s%s%s%s%s' % (meshes, rigged, pro_note, tattoo_note, clip_note, note)
     except Exception as error:
         if state:
             state.status = 'Failed: %s' % error
@@ -240,7 +415,7 @@ class FROSTBITE_OT_cosmetics_import(bpy.types.Operator):
             env = dict(os.environ, AURA_BFN_KEY=''.join(p.bfn_key.split()))
         _job.update(proc=subprocess.Popen(command, env=env, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)),
                     dir=job, start=time.time(), label='%s %s cosmetics' % (state.source, character.name),
-                    rig=state.rigged, pro=state.rigged and state.pro_rig)
+                    rig=state.rigged, pro=state.rigged and state.pro_rig, game=state.source, character=character.id)
         state.status = 'Starting...'
         bpy.app.timers.register(_poll, first_interval=1.0)
         self.report({'INFO'}, 'Converting %d cosmetics into %s' % (len(items), job))
@@ -310,6 +485,10 @@ class FROSTBITE_PT_cosmetics(bpy.types.Panel):
         layout.label(text='Items import in bind pose at the origin', icon='INFO')
         if state.rigged:
             layout.label(text='Pose them through the character armature', icon='ARMATURE_DATA')
+        if state.slot == 'emotes' or any(i.selected and i.slot == 'emotes' for i in state.items):
+            layout.label(text="Emotes become Actions on the character's armature", icon='ACTION')
+        elif 'tattoo' in state.slot or any(i.selected and 'tattoo' in i.slot for i in state.items):
+            layout.label(text='Tattoos retexture the piece already in the scene', icon='BRUSH_DATA')
         draw_credits(layout)
 
 

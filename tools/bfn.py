@@ -316,13 +316,15 @@ class Archive:
 
 
 def discover(game):
+    """Every map, named as the game names it; levels holding several maps are split ('@tvm', '@night')."""
+    import bfn_maps
     archive = Archive(game)
     maps = []
     for leaf, sb in archive.levels().items():
-        if leaf.endswith('_splash') or leaf == 'dsub_podiumcelebration':
+        if leaf.endswith('_splash'):
             continue
-        title = ' '.join(w.capitalize() for w in re.sub(r'^(level|dsub)_', '', leaf).split('_'))
-        maps.append({'name': title, 'package': 'Win32/levels/' + leaf, 'mod': str(game), 'profile': 'bfn'})
+        base = {'name': bfn_maps.internal(leaf), 'package': 'Win32/levels/' + leaf, 'mod': str(game), 'profile': 'bfn'}
+        maps.extend(bfn_maps.entries(archive, leaf, base))
     return sorted(maps, key=lambda item: item['name'])
 
 
@@ -615,9 +617,10 @@ def level_bundles(archive, package):
     return [e for k, e in sorted(archive.toc(sb)['bundles'].items()) if k.startswith(prefix)]
 
 
-def export(game, package, output, key, names, jobs=4, bundles=None, extra_ebx=(), variation_dbs=()):
+def export(game, package, output, key, names, jobs=4, bundles=None, extra_ebx=(), variation_dbs=(), follow=()):
     """Export a level, or with `bundles` (bundle names) just those bundles, e.g. cosmetics.
     `extra_ebx` names further EBX files to take from whichever bundle lists them.
+    `follow` adds document types whose imports are fetched too (effects: EffectBlueprint, EmitterGraph).
     `variation_dbs` names MeshVariationDatabases to add, trimmed to the exported meshes' entries
     (single props take their textures from their map's database)."""
     game, output = Path(game), Path(output)
@@ -759,7 +762,7 @@ def export(game, package, output, key, names, jobs=4, bundles=None, extra_ebx=()
         have = {i['guid'] for i in inventory['assets'] if 'document' in i}
         need, resources = set(), set()
         for item in inventory['assets']:
-            if 'document' not in item or item['guid'] in followed or item.get('root_type') not in FOLLOW:
+            if 'document' not in item or item['guid'] in followed or item.get('root_type') not in FOLLOW | set(follow):
                 continue
             followed.add(item['guid'])
             document = json.loads((output / item['document']).read_text(encoding='utf-8'))

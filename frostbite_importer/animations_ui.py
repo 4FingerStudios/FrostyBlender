@@ -38,6 +38,9 @@ class FrostbiteClip(bpy.types.PropertyGroup):
     frames: IntProperty()
     fps: bpy.props.FloatProperty()
     additive: BoolProperty()
+    face: BoolProperty()
+    face_only: BoolProperty()
+    banks: StringProperty()
     selected: BoolProperty(name='', description='Import this clip')
 
 
@@ -53,6 +56,8 @@ def _fill_clips(state, context):
         entry = state.clips.add()
         entry.name, entry.key, entry.frames = clip['name'], clip['key'], clip.get('frames', 0)
         entry.fps, entry.additive = clip.get('fps', 30.0), clip.get('additive', False)
+        entry.face, entry.face_only = clip.get('face', False), clip.get('face_only', False)
+        entry.banks = clip.get('banks') or ''
 
 
 def _reset(state, context):
@@ -73,6 +78,9 @@ class FrostbiteAnimationsState(bpy.types.PropertyGroup):
     clips: CollectionProperty(type=FrostbiteClip)
     clip_index: IntProperty()
     search: StringProperty(name='', description='Filter clips by name', options={'TEXTEDIT_UPDATE'})
+    kind: EnumProperty(name='Clips', default='ALL', items=[
+        ('ALL', 'All', 'Body and facial clips'), ('BODY', 'Body', 'Body clips only'),
+        ('FACE', 'Face', 'Facial clips: expressions and talking. One that moves only the face plays over the body clip')])
     hide_additive: BoolProperty(name='Hide additive', default=True,
                                 description='Hide additive layers (aim offsets, leans), which only look right blended onto a base clip')
     target: PointerProperty(name='Armature', type=bpy.types.Object, poll=_is_armature,
@@ -159,10 +167,19 @@ def _poll():
         armature = bpy.data.objects.get(armature_name)
         if armature is None:
             raise RuntimeError('The armature %s is gone' % armature_name)
-        first, done, problems = None, 0, []
+        first, done, problems, clips = None, 0, [], []
         for path in result['clips']:
             try:
-                action, matched = animation_import.apply_clip(context, armature, animation_import.load_clip(path), set_fps)
+                clips.append(animation_import.load_clip(path))
+            except Exception as error:
+                problems.append(str(error))
+        # Body clips first: face clips then play over the first of them.
+        clips.sort(key=lambda c: bool(c.get('face_only')))
+        for clip in clips:
+            try:
+                if clip.get('face_only') and first:
+                    armature.animation_data.action = first
+                action, matched = animation_import.apply_clip(context, armature, clip, set_fps)
                 action.use_fake_user = True
                 first = first or action
                 done += 1
@@ -212,7 +229,8 @@ class FROSTBITE_OT_animations_import(bpy.types.Operator):
         job = Path(bpy.path.abspath(p.work)) / 'animations' / ('%s_%s_%s' % (
             state.source.lower(), character.rig.lower(), time.strftime('%Y%m%d_%H%M%S')))
         job.mkdir(parents=True, exist_ok=True)
-        (job / 'items.json').write_text(json.dumps([{'name': c.name, 'key': c.key} for c in chosen]), encoding='utf-8')
+        (job / 'items.json').write_text(json.dumps([{'name': c.name, 'key': c.key, 'banks': c.banks or None}
+                                                    for c in chosen]), encoding='utf-8')
         command = [p.python, str(BRIDGE), 'animations-import', '--tools', bpy.path.abspath(p.tools),
                    '--game', bpy.path.abspath(_game(context)), '--items', str(job / 'items.json'), '--job', str(job)]
         _job.update(proc=subprocess.Popen(command, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)),
@@ -234,14 +252,15 @@ class FROSTBITE_UL_clips(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_property, index=0):
         row = layout.row(align=True)
         row.prop(item, 'selected')
-        row.label(text=item.name + (' (additive)' if item.additive else ''))
+        row.label(text=item.name + (' (additive)' if item.additive else ''), icon='MONKEY' if item.face else 'NONE')
         row.label(text='%d f' % item.frames)
 
     def filter_items(self, context, data, propname):
         state = context.scene.frostbite_animations
         search = state.search.lower().replace(' ', '')
         flags = [self.bitflag_filter_item if ((not search or search in c.name.lower().replace(' ', '').replace('_', '')
-                                                or search in c.name.lower()) and not (state.hide_additive and c.additive)) else 0
+                                                or search in c.name.lower()) and not (state.hide_additive and c.additive)
+                                               and state.kind in ('ALL', 'FACE' if c.face else 'BODY')) else 0
                  for c in getattr(data, propname)]
         return flags, []
 
@@ -269,6 +288,8 @@ class FROSTBITE_PT_animations(bpy.types.Panel):
             row = layout.row(align=True)
             row.prop(state, 'search', icon='VIEWZOOM')
             row.prop(state, 'hide_additive', text='', icon='HIDE_ON' if state.hide_additive else 'HIDE_OFF')
+            if any(c.face for c in state.clips):
+                layout.row(align=True).prop(state, 'kind', expand=True)
             layout.template_list('FROSTBITE_UL_clips', '', state, 'clips', state, 'clip_index', rows=10)
             ticked = sum(1 for c in state.clips if c.selected)
             row = layout.row(align=True)

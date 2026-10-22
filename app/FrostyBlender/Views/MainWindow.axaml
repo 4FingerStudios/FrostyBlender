@@ -297,163 +297,398 @@
           <StackPanel Spacing="3">
             <StackPanel Orientation="Horizontal" Spacing="10">
               <TextBlock Classes="h1" Text="Explorer" />
-              <Border Classes="chip" VerticalAlignment="Center" Margin="0,4,0,0"
-                      IsVisible="{Binding ExplorerCount, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+              <Border Classes="chip" VerticalAlignment="Center" Margin="0,4,0,0" IsVisible="{Binding ExplorerIsFiles}">
                 <TextBlock Text="{Binding ExplorerCount}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource Muted}" />
               </Border>
+              <Border Classes="chip" VerticalAlignment="Center" Margin="0,4,0,0" IsVisible="{Binding ExplorerIsSounds}">
+                <TextBlock Text="{Binding SoundsCount}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource Muted}" />
+              </Border>
+              <Border Classes="chip" VerticalAlignment="Center" Margin="0,4,0,0" IsVisible="{Binding ExplorerIsText}">
+                <TextBlock Text="{Binding TextCount}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource Muted}" />
+              </Border>
             </StackPanel>
-            <TextBlock Classes="muted" FontSize="13" Text="Every file in the game: look inside, export it, or send meshes to Blender." />
+            <TextBlock Classes="muted" FontSize="13" Text="Every file, sound and line of text in the game: look inside, export it, or send meshes to Blender." />
           </StackPanel>
           <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+            <ListBox Classes="pills" ItemsSource="{Binding ExplorerModes}" SelectedItem="{Binding ExplorerMode}">
+              <ListBox.ItemsPanel>
+                <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+              </ListBox.ItemsPanel>
+            </ListBox>
+            <Border Width="1" Height="22" Background="{StaticResource Line}" Margin="2,0" />
             <ListBox Classes="pills" ItemsSource="{Binding Games}" SelectedItem="{Binding Game}">
               <ListBox.ItemsPanel>
                 <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
               </ListBox.ItemsPanel>
             </ListBox>
-            <Button Classes="ghost" Width="38" Height="38" ToolTip.Tip="Read the game's file list again" Command="{Binding ExplorerRefreshCommand}">
+            <Button Classes="ghost" Width="38" Height="38" ToolTip.Tip="Read the game's list again" Command="{Binding ExplorerRefreshCommand}">
               <TextBlock Classes="icon" Text="&#xE72C;" FontSize="14" HorizontalAlignment="Center" />
             </Button>
           </StackPanel>
         </Grid>
 
-        <!-- path bar and search -->
-        <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,*,300" Margin="6,0,6,10">
-          <Button Classes="ghost" Width="34" Height="34" ToolTip.Tip="All files" Command="{Binding ExplorerHomeCommand}">
-            <TextBlock Classes="icon" Text="&#xE80F;" FontSize="13" HorizontalAlignment="Center" />
-          </Button>
-          <Button Grid.Column="1" Classes="ghost" Width="34" Height="34" Margin="6,0,0,0" ToolTip.Tip="Up one folder"
-                  Command="{Binding ExplorerUpCommand}" IsEnabled="{Binding !ExplorerAtRoot}">
-            <TextBlock Classes="icon" Text="&#xE74A;" FontSize="13" HorizontalAlignment="Center" />
-          </Button>
-          <Border Grid.Column="2" Classes="chip" Margin="8,0,10,0" Padding="12,0" Height="34" VerticalAlignment="Center">
-            <TextBlock Text="{Binding ExplorerPathText}" VerticalAlignment="Center" FontSize="12.5" TextTrimming="CharacterEllipsis" />
-          </Border>
-          <Grid Grid.Column="3">
-            <TextBox Watermark="Search all files…" Text="{Binding ExplorerSearch}" Padding="34,0,10,0" />
-            <TextBlock Classes="icon" Text="&#xE721;" FontSize="13" Foreground="{StaticResource Faint}"
-                       Margin="12,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False" />
-          </Grid>
-        </Grid>
-
-        <Grid DockPanel.Dock="Bottom" ColumnDefinitions="Auto,Auto,*" Margin="6,8,6,10">
-          <Button Content="Tick all here" Padding="12,6" Command="{Binding ExplorerTickAllCommand}" />
-          <Button Grid.Column="1" Content="Clear ticks" Padding="12,6" Margin="8,0,0,0" Command="{Binding ExplorerClearCommand}" />
-          <TextBlock Grid.Column="2" Classes="muted" FontSize="12" VerticalAlignment="Center" Margin="12,0,0,0"
-                     Text="Click a folder to open it, a file to look inside. Ticks stay while you browse." />
-        </Grid>
-
         <Panel>
-          <ListBox ItemsSource="{Binding ExplorerRows}" SelectedItem="{Binding ExplorerSelected}" Background="Transparent"
-                   ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-            <ListBox.ItemTemplate>
-              <DataTemplate x:DataType="vm:ExplorerRow">
-                <Grid ColumnDefinitions="28,26,*,120,80" Height="26">
-                  <CheckBox IsChecked="{Binding Checked}" IsVisible="{Binding CanCheck}" VerticalAlignment="Center" MinWidth="0" />
-                  <TextBlock Grid.Column="1" Classes="icon" Text="{Binding Glyph}" FontSize="14" VerticalAlignment="Center"
-                             Foreground="{StaticResource Sun}" IsVisible="{Binding IsFolder}" />
-                  <TextBlock Grid.Column="1" Classes="icon" Text="{Binding Glyph}" FontSize="14" VerticalAlignment="Center"
-                             Foreground="{StaticResource Muted}" IsVisible="{Binding IsFile}" />
-                  <TextBlock Grid.Column="2" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                  <TextBlock Grid.Column="3" Text="{Binding Detail}" Classes="muted" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                  <TextBlock Grid.Column="4" Text="{Binding SizeText}" Classes="muted" FontSize="12" VerticalAlignment="Center" HorizontalAlignment="Right" />
-                </Grid>
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
+          <!-- files -->
+          <DockPanel IsVisible="{Binding ExplorerIsFiles}">
+            <!-- path bar and search -->
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,*,300" Margin="6,0,6,10">
+              <Button Classes="ghost" Width="34" Height="34" ToolTip.Tip="All files" Command="{Binding ExplorerHomeCommand}">
+                <TextBlock Classes="icon" Text="&#xE80F;" FontSize="13" HorizontalAlignment="Center" />
+              </Button>
+              <Button Grid.Column="1" Classes="ghost" Width="34" Height="34" Margin="6,0,0,0" ToolTip.Tip="Up one folder"
+                      Command="{Binding ExplorerUpCommand}" IsEnabled="{Binding !ExplorerAtRoot}">
+                <TextBlock Classes="icon" Text="&#xE74A;" FontSize="13" HorizontalAlignment="Center" />
+              </Button>
+              <Border Grid.Column="2" Classes="chip" Margin="8,0,10,0" Padding="12,0" Height="34" VerticalAlignment="Center">
+                <TextBlock Text="{Binding ExplorerPathText}" VerticalAlignment="Center" FontSize="12.5" TextTrimming="CharacterEllipsis" />
+              </Border>
+              <Grid Grid.Column="3">
+                <TextBox Watermark="Search all files…" Text="{Binding ExplorerSearch}" Padding="34,0,10,0" />
+                <TextBlock Classes="icon" Text="&#xE721;" FontSize="13" Foreground="{StaticResource Faint}"
+                           Margin="12,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False" />
+              </Grid>
+            </Grid>
 
-          <Border Classes="card" IsVisible="{Binding ExplorerLoading}" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="28,24">
-            <StackPanel Spacing="12" Width="300">
-              <TextBlock Classes="eyebrow" Text="READING" HorizontalAlignment="Center" Foreground="{StaticResource Sun}" />
-              <TextBlock Text="Listing every file in the game…" HorizontalAlignment="Center" FontWeight="SemiBold" />
-              <ProgressBar IsIndeterminate="True" />
-              <TextBlock Text="The first time takes a little while; after that it opens at once."
-                         HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Classes="muted" FontSize="12" />
-            </StackPanel>
-          </Border>
-          <Border Classes="card" IsVisible="{Binding ExplorerHasError}" MaxWidth="520" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="26">
-            <StackPanel Spacing="12">
-              <TextBlock Classes="eyebrow" Text="NOT READY YET" Foreground="{StaticResource Sun}" />
-              <TextBlock Text="{Binding ExplorerError}" TextWrapping="Wrap" Classes="muted" />
-              <Button Classes="accent" Content="Try again" HorizontalAlignment="Left" Padding="22,9" Command="{Binding ExplorerRefreshCommand}" />
-            </StackPanel>
-          </Border>
+            <Grid DockPanel.Dock="Bottom" ColumnDefinitions="Auto,Auto,*" Margin="6,8,6,10">
+              <Button Content="Tick all here" Padding="12,6" Command="{Binding ExplorerTickAllCommand}" />
+              <Button Grid.Column="1" Content="Clear ticks" Padding="12,6" Margin="8,0,0,0" Command="{Binding ExplorerClearCommand}" />
+              <TextBlock Grid.Column="2" Classes="muted" FontSize="12" VerticalAlignment="Center" Margin="12,0,0,0"
+                         Text="Click a folder to open it, a file to look inside. Ticks stay while you browse." />
+            </Grid>
+
+            <Panel>
+              <ListBox ItemsSource="{Binding ExplorerRows}" SelectedItem="{Binding ExplorerSelected}" Background="Transparent"
+                       ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:ExplorerRow">
+                    <Grid ColumnDefinitions="28,26,*,120,80" Height="26">
+                      <CheckBox IsChecked="{Binding Checked}" IsVisible="{Binding CanCheck}" VerticalAlignment="Center" MinWidth="0" />
+                      <TextBlock Grid.Column="1" Classes="icon" Text="{Binding Glyph}" FontSize="14" VerticalAlignment="Center"
+                                 Foreground="{StaticResource Sun}" IsVisible="{Binding IsFolder}" />
+                      <TextBlock Grid.Column="1" Classes="icon" Text="{Binding Glyph}" FontSize="14" VerticalAlignment="Center"
+                                 Foreground="{StaticResource Muted}" IsVisible="{Binding IsFile}" />
+                      <TextBlock Grid.Column="2" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Grid.Column="3" Text="{Binding Detail}" Classes="muted" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Grid.Column="4" Text="{Binding SizeText}" Classes="muted" FontSize="12" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+
+              <Border Classes="card" IsVisible="{Binding ExplorerLoading}" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="28,24">
+                <StackPanel Spacing="12" Width="300">
+                  <TextBlock Classes="eyebrow" Text="READING" HorizontalAlignment="Center" Foreground="{StaticResource Sun}" />
+                  <TextBlock Text="Listing every file in the game…" HorizontalAlignment="Center" FontWeight="SemiBold" />
+                  <ProgressBar IsIndeterminate="True" />
+                  <TextBlock Text="The first time takes a little while; after that it opens at once."
+                             HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Classes="muted" FontSize="12" />
+                </StackPanel>
+              </Border>
+              <Border Classes="card" IsVisible="{Binding ExplorerHasError}" MaxWidth="520" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="26">
+                <StackPanel Spacing="12">
+                  <TextBlock Classes="eyebrow" Text="NOT READY YET" Foreground="{StaticResource Sun}" />
+                  <TextBlock Text="{Binding ExplorerError}" TextWrapping="Wrap" Classes="muted" />
+                  <Button Classes="accent" Content="Try again" HorizontalAlignment="Left" Padding="22,9" Command="{Binding ExplorerRefreshCommand}" />
+                </StackPanel>
+              </Border>
+            </Panel>
+          </DockPanel>
+
+          <!-- sounds -->
+          <DockPanel IsVisible="{Binding ExplorerIsSounds}">
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,300" Margin="6,0,6,10">
+              <ListBox Classes="pills" ItemsSource="{Binding SoundKinds}" SelectedItem="{Binding SoundKind}" VerticalAlignment="Center">
+                <ListBox.ItemsPanel>
+                  <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+                </ListBox.ItemsPanel>
+              </ListBox>
+              <Grid Grid.Column="2">
+                <TextBox Watermark="Search sounds…" Text="{Binding SoundSearch}" Padding="34,0,10,0" />
+                <TextBlock Classes="icon" Text="&#xE721;" FontSize="13" Foreground="{StaticResource Faint}"
+                           Margin="12,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False" />
+              </Grid>
+            </Grid>
+
+            <Grid DockPanel.Dock="Bottom" ColumnDefinitions="Auto,Auto,*" Margin="6,8,6,10">
+              <Button Content="Tick all shown" Padding="12,6" Command="{Binding SoundTickAllCommand}" />
+              <Button Grid.Column="1" Content="Clear ticks" Padding="12,6" Margin="8,0,0,0" Command="{Binding SoundClearCommand}" />
+              <TextBlock Grid.Column="2" Classes="muted" FontSize="12" VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap"
+                         Text="Voice lines, music and effects. Click one to play it, tick several to export them as WAV." />
+            </Grid>
+
+            <Panel>
+              <ListBox ItemsSource="{Binding SoundRows}" SelectedItem="{Binding SoundSelected}" Background="Transparent"
+                       ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:SoundRow">
+                    <Grid ColumnDefinitions="28,26,*,64,70,200" Height="26" ToolTip.Tip="{Binding Path}">
+                      <CheckBox IsChecked="{Binding Checked}" VerticalAlignment="Center" MinWidth="0" />
+                      <TextBlock Grid.Column="1" Classes="icon" Text="{Binding Glyph}" FontSize="14" VerticalAlignment="Center"
+                                 Foreground="{StaticResource Muted}" />
+                      <TextBlock Grid.Column="2" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Grid.Column="3" Text="{Binding Kind}" Classes="muted" FontSize="12" VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="4" Text="{Binding DurationText}" Classes="muted" FontSize="12" VerticalAlignment="Center"
+                                 HorizontalAlignment="Right" Margin="0,0,12,0" />
+                      <TextBlock Grid.Column="5" Text="{Binding Info}" Classes="muted" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+
+              <Border Classes="card" IsVisible="{Binding SoundsLoading}" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="28,24">
+                <StackPanel Spacing="12" Width="300">
+                  <TextBlock Classes="eyebrow" Text="LISTENING" HorizontalAlignment="Center" Foreground="{StaticResource Sun}" />
+                  <TextBlock Text="Finding every sound in the game…" HorizontalAlignment="Center" FontWeight="SemiBold" />
+                  <ProgressBar IsIndeterminate="True" />
+                  <TextBlock Text="The first time takes about half a minute; after that it opens at once."
+                             HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Classes="muted" FontSize="12" />
+                </StackPanel>
+              </Border>
+              <Border Classes="card" IsVisible="{Binding SoundsHasError}" MaxWidth="520" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="26">
+                <StackPanel Spacing="12">
+                  <TextBlock Classes="eyebrow" Text="NO SOUNDS" Foreground="{StaticResource Sun}" />
+                  <TextBlock Text="{Binding SoundsError}" TextWrapping="Wrap" Classes="muted" />
+                  <Button Classes="accent" Content="Try again" HorizontalAlignment="Left" Padding="22,9" Command="{Binding SoundsRefreshCommand}" />
+                </StackPanel>
+              </Border>
+            </Panel>
+          </DockPanel>
+
+          <!-- text -->
+          <DockPanel IsVisible="{Binding ExplorerIsText}">
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,300" Margin="6,0,6,10">
+              <ComboBox Width="200" ItemsSource="{Binding TextLanguages}" SelectedItem="{Binding TextLanguage}" VerticalAlignment="Center"
+                        ToolTip.Tip="Language" />
+              <TextBlock Grid.Column="1" Text="{Binding TextShown}" Classes="muted" FontSize="12" VerticalAlignment="Center" Margin="12,0"
+                         TextTrimming="CharacterEllipsis" />
+              <Grid Grid.Column="2">
+                <TextBox Watermark="Search text, IDs or hashes…" Text="{Binding TextSearch}" Padding="34,0,10,0" />
+                <TextBlock Classes="icon" Text="&#xE721;" FontSize="13" Foreground="{StaticResource Faint}"
+                           Margin="12,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False" />
+              </Grid>
+            </Grid>
+
+            <TextBlock DockPanel.Dock="Bottom" Classes="muted" FontSize="12" Margin="6,8,6,10" TextWrapping="Wrap"
+                       Text="The game's UI text. Names like ID_M_PEAGATLING come from the game files; strings never named there show their hash." />
+
+            <Panel>
+              <ListBox ItemsSource="{Binding TextRows}" SelectedItem="{Binding TextSelected}" Background="Transparent"
+                       ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:TextRow">
+                    <Grid ColumnDefinitions="280,*" Height="26">
+                      <TextBlock Text="{Binding Key}" Classes="muted" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="4,0,12,0" />
+                      <TextBlock Grid.Column="1" Text="{Binding OneLine}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+
+              <Border Classes="card" IsVisible="{Binding TextLoading}" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="28,24">
+                <StackPanel Spacing="12" Width="300">
+                  <TextBlock Classes="eyebrow" Text="READING" HorizontalAlignment="Center" Foreground="{StaticResource Sun}" />
+                  <TextBlock Text="Reading the game's text…" HorizontalAlignment="Center" FontWeight="SemiBold" />
+                  <ProgressBar IsIndeterminate="True" />
+                  <TextBlock Text="The first time also looks for the strings' names in the game files, which takes about a minute."
+                             HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Classes="muted" FontSize="12" />
+                </StackPanel>
+              </Border>
+              <Border Classes="card" IsVisible="{Binding TextHasError}" MaxWidth="520" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="26">
+                <StackPanel Spacing="12">
+                  <TextBlock Classes="eyebrow" Text="NO TEXT" Foreground="{StaticResource Sun}" />
+                  <TextBlock Text="{Binding TextError}" TextWrapping="Wrap" Classes="muted" />
+                  <Button Classes="accent" Content="Try again" HorizontalAlignment="Left" Padding="22,9" Command="{Binding TextRefreshCommand}" />
+                </StackPanel>
+              </Border>
+            </Panel>
+          </DockPanel>
         </Panel>
       </DockPanel>
 
       <!-- details and export -->
       <Border Grid.Column="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1,0,0,0">
-        <DockPanel Margin="22,10,22,18">
-          <Border DockPanel.Dock="Bottom" Classes="card" Padding="16" Margin="0,14,0,0">
-            <StackPanel Spacing="10">
-              <TextBlock Classes="eyebrow" Text="EXPORT" />
-              <Grid ColumnDefinitions="*,Auto">
-                <TextBlock Text="{Binding ExplorerDest}" Classes="muted" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                <Button Grid.Column="1" Content="Change…" Padding="12,6" Margin="8,0,0,0" Command="{Binding ExplorerChooseFolderCommand}" />
-              </Grid>
-              <Grid ColumnDefinitions="*,Auto">
-                <TextBlock Text="Texture size" VerticalAlignment="Center" />
-                <ComboBox Grid.Column="1" Width="110" ItemsSource="{Binding TextureSizes}" SelectedItem="{Binding TextureSize}" />
-              </Grid>
-              <Button Classes="accent" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,11"
-                      Content="{Binding ExplorerExportText}" Command="{Binding ExplorerExportCommand}" IsEnabled="{Binding !ExplorerBusy}" />
-              <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,9"
-                      Content="{Binding ExplorerSendText}" Command="{Binding ExplorerSendToBlenderCommand}"
-                      IsVisible="{Binding ExplorerMeshes}" IsEnabled="{Binding !ExplorerBusy}" />
-              <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,8" Content="Open export folder"
-                      Command="{Binding OpenCommand}" CommandParameter="{Binding ExplorerDest}" />
-              <TextBlock Text="{Binding ExplorerStatus}" TextWrapping="Wrap" FontSize="12" Classes="muted"
-                         IsVisible="{Binding ExplorerStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-            </StackPanel>
-          </Border>
+        <Panel Margin="22,10,22,18">
+          <!-- files -->
+          <DockPanel IsVisible="{Binding ExplorerIsFiles}">
+            <Border DockPanel.Dock="Bottom" Classes="card" Padding="16" Margin="0,14,0,0">
+              <StackPanel Spacing="10">
+                <TextBlock Classes="eyebrow" Text="EXPORT" />
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="{Binding ExplorerDest}" Classes="muted" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                  <Button Grid.Column="1" Content="Change…" Padding="12,6" Margin="8,0,0,0" Command="{Binding ExplorerChooseFolderCommand}" />
+                </Grid>
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="Texture size" VerticalAlignment="Center" />
+                  <ComboBox Grid.Column="1" Width="110" ItemsSource="{Binding TextureSizes}" SelectedItem="{Binding TextureSize}" />
+                </Grid>
+                <Button Classes="accent" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,11"
+                        Content="{Binding ExplorerExportText}" Command="{Binding ExplorerExportCommand}" IsEnabled="{Binding !ExplorerBusy}" />
+                <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,9"
+                        Content="{Binding ExplorerSendText}" Command="{Binding ExplorerSendToBlenderCommand}"
+                        IsVisible="{Binding ExplorerMeshes}" IsEnabled="{Binding !ExplorerBusy}" />
+                <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,8" Content="Open export folder"
+                        Command="{Binding OpenCommand}" CommandParameter="{Binding ExplorerDest}" />
+                <TextBlock Text="{Binding ExplorerStatus}" TextWrapping="Wrap" FontSize="12" Classes="muted"
+                           IsVisible="{Binding ExplorerStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+              </StackPanel>
+            </Border>
 
-          <Panel>
-            <StackPanel IsVisible="{Binding !ExplorerHasInfo}" VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="10" Margin="30">
-              <Border Width="64" Height="64" CornerRadius="20" Background="{StaticResource AccentSoft}" HorizontalAlignment="Center">
-                <TextBlock Classes="icon" Text="&#xEC50;" FontSize="24" Foreground="{StaticResource Accent}"
-                           HorizontalAlignment="Center" VerticalAlignment="Center" />
-              </Border>
-              <TextBlock Classes="h2" Text="Pick a file" HorizontalAlignment="Center" />
-              <TextBlock Text="Textures show a preview. Game data (EBX) exports as readable JSON." Classes="muted"
-                         TextWrapping="Wrap" TextAlignment="Center" />
-            </StackPanel>
-            <ScrollViewer IsVisible="{Binding ExplorerHasInfo}">
-              <StackPanel Spacing="12">
-                <StackPanel Spacing="3">
-                  <TextBlock Classes="eyebrow" Text="{Binding ExplorerInfoType}" Foreground="{StaticResource Sun}" />
-                  <TextBlock Classes="h2" Text="{Binding ExplorerInfoTitle}" TextWrapping="Wrap" />
-                </StackPanel>
-                <ProgressBar IsIndeterminate="True" IsVisible="{Binding ExplorerInspecting}" />
-                <Border CornerRadius="12" ClipToBounds="True" Background="#1AFFFFFF" IsVisible="{Binding ExplorerHasPreview}" MaxHeight="300">
-                  <Image Source="{Binding ExplorerPreview}" Stretch="Uniform" />
+            <Panel>
+              <StackPanel IsVisible="{Binding !ExplorerHasInfo}" VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="10" Margin="30">
+                <Border Width="64" Height="64" CornerRadius="20" Background="{StaticResource AccentSoft}" HorizontalAlignment="Center">
+                  <TextBlock Classes="icon" Text="&#xEC50;" FontSize="24" Foreground="{StaticResource Accent}"
+                             HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Border>
-                <ItemsControl ItemsSource="{Binding ExplorerFields}">
-                  <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="vm:ExplorerField">
-                      <Grid ColumnDefinitions="120,*" Margin="0,2">
-                        <TextBlock Text="{Binding Key}" Classes="muted" FontSize="12" TextTrimming="CharacterEllipsis" />
-                        <SelectableTextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
-                      </Grid>
-                    </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
-                <StackPanel Spacing="4" IsVisible="{Binding ExplorerHasImports}">
-                  <TextBlock Classes="eyebrow" Text="USES THESE FILES" />
-                  <ItemsControl ItemsSource="{Binding ExplorerImports}">
+                <TextBlock Classes="h2" Text="Pick a file" HorizontalAlignment="Center" />
+                <TextBlock Text="Textures show a preview. Game data (EBX) exports as readable JSON, sounds as WAV." Classes="muted"
+                           TextWrapping="Wrap" TextAlignment="Center" />
+              </StackPanel>
+              <ScrollViewer IsVisible="{Binding ExplorerHasInfo}">
+                <StackPanel Spacing="12">
+                  <StackPanel Spacing="3">
+                    <TextBlock Classes="eyebrow" Text="{Binding ExplorerInfoType}" Foreground="{StaticResource Sun}" />
+                    <TextBlock Classes="h2" Text="{Binding ExplorerInfoTitle}" TextWrapping="Wrap" />
+                  </StackPanel>
+                  <ProgressBar IsIndeterminate="True" IsVisible="{Binding ExplorerInspecting}" />
+                  <Border CornerRadius="12" ClipToBounds="True" Background="#1AFFFFFF" IsVisible="{Binding ExplorerHasPreview}" MaxHeight="300">
+                    <Image Source="{Binding ExplorerPreview}" Stretch="Uniform" />
+                  </Border>
+                  <ItemsControl ItemsSource="{Binding ExplorerFields}">
                     <ItemsControl.ItemTemplate>
-                      <DataTemplate x:DataType="x:String">
-                        <Button Classes="link" Padding="0,2" HorizontalContentAlignment="Left"
-                                Command="{Binding $parent[Window].((vm:MainViewModel)DataContext).ExplorerGoToCommand}"
-                                CommandParameter="{Binding}">
-                          <TextBlock Text="{Binding}" FontSize="12" TextTrimming="CharacterEllipsis" Foreground="{StaticResource Accent}" />
-                        </Button>
+                      <DataTemplate x:DataType="vm:ExplorerField">
+                        <Grid ColumnDefinitions="120,*" Margin="0,2">
+                          <TextBlock Text="{Binding Key}" Classes="muted" FontSize="12" TextTrimming="CharacterEllipsis" />
+                          <SelectableTextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
+                        </Grid>
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
+                  <StackPanel Spacing="4" IsVisible="{Binding ExplorerHasImports}">
+                    <TextBlock Classes="eyebrow" Text="USES THESE FILES" />
+                    <ItemsControl ItemsSource="{Binding ExplorerImports}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="x:String">
+                          <Button Classes="link" Padding="0,2" HorizontalContentAlignment="Left"
+                                  Command="{Binding $parent[Window].((vm:MainViewModel)DataContext).ExplorerGoToCommand}"
+                                  CommandParameter="{Binding}">
+                            <TextBlock Text="{Binding}" FontSize="12" TextTrimming="CharacterEllipsis" Foreground="{StaticResource Accent}" />
+                          </Button>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
                 </StackPanel>
+              </ScrollViewer>
+            </Panel>
+          </DockPanel>
+
+          <!-- sounds -->
+          <DockPanel IsVisible="{Binding ExplorerIsSounds}">
+            <Border DockPanel.Dock="Bottom" Classes="card" Padding="16" Margin="0,14,0,0">
+              <StackPanel Spacing="10">
+                <TextBlock Classes="eyebrow" Text="EXPORT AS WAV" />
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="{Binding ExplorerDest}" Classes="muted" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                  <Button Grid.Column="1" Content="Change…" Padding="12,6" Margin="8,0,0,0" Command="{Binding ExplorerChooseFolderCommand}" />
+                </Grid>
+                <Button Classes="accent" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,11"
+                        Content="{Binding SoundExportText}" Command="{Binding SoundExportCommand}" IsEnabled="{Binding !ExplorerBusy}" />
+                <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,8" Content="Open export folder"
+                        Command="{Binding OpenCommand}" CommandParameter="{Binding ExplorerDest}" />
+                <TextBlock Text="{Binding ExplorerStatus}" TextWrapping="Wrap" FontSize="12" Classes="muted"
+                           IsVisible="{Binding ExplorerStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
               </StackPanel>
-            </ScrollViewer>
-          </Panel>
-        </DockPanel>
+            </Border>
+
+            <Panel>
+              <StackPanel IsVisible="{Binding !SoundHasSelection}" VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="10" Margin="30">
+                <Border Width="64" Height="64" CornerRadius="20" Background="{StaticResource AccentSoft}" HorizontalAlignment="Center">
+                  <TextBlock Classes="icon" Text="&#xE767;" FontSize="24" Foreground="{StaticResource Accent}"
+                             HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <TextBlock Classes="h2" Text="Pick a sound" HorizontalAlignment="Center" />
+                <TextBlock Text="{Binding SoundsNote}" Classes="muted" TextWrapping="Wrap" TextAlignment="Center" />
+              </StackPanel>
+              <ScrollViewer IsVisible="{Binding SoundHasSelection}">
+                <Panel DataContext="{Binding SoundSelected}">
+                <StackPanel Spacing="12" x:DataType="vm:SoundRow">
+                  <StackPanel Spacing="3">
+                    <TextBlock Classes="eyebrow" Text="{Binding Kind}" Foreground="{StaticResource Sun}" />
+                    <TextBlock Classes="h2" Text="{Binding Name}" TextWrapping="Wrap" />
+                  </StackPanel>
+                  <Button Classes="accent" HorizontalAlignment="Left" Padding="22,9"
+                          Command="{Binding $parent[Window].((vm:MainViewModel)DataContext).SoundPlayCommand}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock Classes="icon" Text="&#xE768;" FontSize="13" VerticalAlignment="Center" />
+                      <TextBlock Text="Play" VerticalAlignment="Center" />
+                    </StackPanel>
+                  </Button>
+                  <Grid ColumnDefinitions="120,*" RowDefinitions="Auto,Auto,Auto,Auto">
+                    <TextBlock Text="Path" Classes="muted" FontSize="12" />
+                    <SelectableTextBlock Grid.Column="1" Text="{Binding Path}" FontSize="12" TextWrapping="Wrap" />
+                    <TextBlock Grid.Row="1" Text="Length" Classes="muted" FontSize="12" Margin="0,4,0,0" />
+                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding DurationText}" FontSize="12" Margin="0,4,0,0" />
+                    <TextBlock Grid.Row="2" Text="Format" Classes="muted" FontSize="12" Margin="0,4,0,0" />
+                    <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Info}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0" />
+                    <TextBlock Grid.Row="3" Text="Takes" Classes="muted" FontSize="12" Margin="0,4,0,0" />
+                    <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Variations}" FontSize="12" Margin="0,4,0,0" />
+                  </Grid>
+                  <TextBlock Text="Sounds with several takes (the game picks one at random) export as one WAV per take: name_01.wav, name_02.wav…"
+                             Classes="muted" FontSize="12" TextWrapping="Wrap" />
+                </StackPanel>
+                </Panel>
+              </ScrollViewer>
+            </Panel>
+          </DockPanel>
+
+          <!-- text -->
+          <DockPanel IsVisible="{Binding ExplorerIsText}">
+            <Border DockPanel.Dock="Bottom" Classes="card" Padding="16" Margin="0,14,0,0">
+              <StackPanel Spacing="10">
+                <TextBlock Classes="eyebrow" Text="EXPORT ALL TEXT" />
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="{Binding ExplorerDest}" Classes="muted" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                  <Button Grid.Column="1" Content="Change…" Padding="12,6" Margin="8,0,0,0" Command="{Binding ExplorerChooseFolderCommand}" />
+                </Grid>
+                <Button Classes="accent" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,11"
+                        Content="Export every language to CSV and JSON" Command="{Binding TextExportCommand}" IsEnabled="{Binding !ExplorerBusy}" />
+                <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,8" Content="Open export folder"
+                        Command="{Binding OpenCommand}" CommandParameter="{Binding ExplorerDest}" />
+                <TextBlock Text="{Binding ExplorerStatus}" TextWrapping="Wrap" FontSize="12" Classes="muted"
+                           IsVisible="{Binding ExplorerStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+              </StackPanel>
+            </Border>
+
+            <Panel>
+              <StackPanel IsVisible="{Binding !TextHasSelection}" VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="10" Margin="30">
+                <Border Width="64" Height="64" CornerRadius="20" Background="{StaticResource AccentSoft}" HorizontalAlignment="Center">
+                  <TextBlock Classes="icon" Text="&#xE8D2;" FontSize="24" Foreground="{StaticResource Accent}"
+                             HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <TextBlock Classes="h2" Text="Pick a string" HorizontalAlignment="Center" />
+                <TextBlock Text="The export holds every string in every language the game has, one column per language." Classes="muted"
+                           TextWrapping="Wrap" TextAlignment="Center" />
+              </StackPanel>
+              <ScrollViewer IsVisible="{Binding TextHasSelection}">
+                <Panel DataContext="{Binding TextSelected}">
+                <StackPanel Spacing="12" x:DataType="vm:TextRow">
+                  <StackPanel Spacing="3">
+                    <TextBlock Classes="eyebrow" Text="STRING" Foreground="{StaticResource Sun}" />
+                    <SelectableTextBlock Classes="h2" Text="{Binding Key}" TextWrapping="Wrap" />
+                  </StackPanel>
+                  <Border Classes="card" Padding="14">
+                    <SelectableTextBlock Text="{Binding Text}" TextWrapping="Wrap" />
+                  </Border>
+                  <Grid ColumnDefinitions="120,*">
+                    <TextBlock Text="Hash" Classes="muted" FontSize="12" />
+                    <SelectableTextBlock Grid.Column="1" Text="{Binding Hash}" FontSize="12" />
+                  </Grid>
+                </StackPanel>
+                </Panel>
+              </ScrollViewer>
+            </Panel>
+          </DockPanel>
+        </Panel>
       </Border>
     </Grid>
 

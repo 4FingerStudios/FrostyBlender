@@ -132,6 +132,10 @@ public partial class MainViewModel
 
     private async Task LoadExplorer(bool refresh)
     {
+        if (ExplorerDest.Length == 0 || _explorerGame != Game)
+            ExplorerDest = Path.Combine(_link.Info?.Work is { Length: > 0 } dir ? dir : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                "Explorer", Game);
+        _ = LoadExplorerMedia(false);  // the Sounds or Text list, when one is open
         if (!refresh && _explorerGame == Game && _explorerAll.Count > 0) return;
         var id = ++_explorerScan;
         ExplorerLoading = true;
@@ -258,7 +262,7 @@ public partial class MainViewModel
     }
 
     [RelayCommand]
-    private Task ExplorerRefresh() => LoadExplorer(true);
+    private Task ExplorerRefresh() => ExplorerIsFiles ? LoadExplorer(true) : LoadExplorerMedia(true);
 
     [RelayCommand]
     private void ExplorerTickAll()
