@@ -65,13 +65,27 @@ def _gw_level_meshes(game, package):
     return out
 
 
+def _levels(entries):
+    """One entry per level file. The map list splits a level into its maps and times of day
+    ('…/Level_X@1-night', see variants.py); props belong to the whole level, so they come back together
+    under the level's map names, e.g. 'Suburban Flats / Zomboss Estate'."""
+    by_level = {}
+    for entry in entries:
+        base = entry['package'].partition('@')[0]
+        name = re.sub(r' Night$', '', entry['name'])
+        names = by_level.setdefault(base, [])
+        if name not in names:
+            names.append(name)
+    return [{'name': ' / '.join(names), 'package': base} for base, names in by_level.items()]
+
+
 def discover(game):
     kind = game_kind(game)
     maps = []
     if kind == 'bfn':
         import bfn
         archive = bfn.Archive(game)
-        for entry in bfn.discover(game):
+        for entry in _levels(bfn.discover(game)):
             meshes, dbs = {}, set()
             for bundle in bfn.level_bundles(archive, entry['package']):
                 try:
@@ -87,7 +101,7 @@ def discover(game):
             maps.append((entry, meshes, sorted(dbs)))
     else:
         module = __import__('gw1' if kind == 'gw1' else 'gw2')
-        for entry in module.discover(game):
+        for entry in _levels(module.discover(game)):
             meshes = _gw_level_meshes(game, entry['package'])
             # EBX names drop the bundle ID's platform folder.
             dbs = sorted({re.sub(r'^(?:win32|xenon)/', '', b, flags=re.I) + '/meshvariationdb_' + b.split('/')[0].lower()

@@ -30,15 +30,26 @@ LEVELS = {'gw1': 'Win32/_pvz/Levels/Mainstreet/Level_COOP_Mainstreet/Level_COOP_
           'bfn': 'level_picnic_root'}
 
 
+def _level_files(game):
+    """GW1's level files, once each. The map list splits levels into maps and times of day ('…@1-night',
+    see variants.py), but banks live in the level file itself."""
+    import gw1
+    seen = []
+    for level in gw1.discover(game):
+        base = level['package'].partition('@')[0]
+        if base not in seen:
+            seen.append(base)
+    return seen
+
+
 def level_for(game, kind):
     preferred = LEVELS[kind]
     if kind != 'gw1' or (Path(game) / 'Data' / (preferred + '.toc')).is_file():
         return preferred
-    import gw1
-    levels = gw1.discover(game)
+    levels = _level_files(game)
     if not levels:
         raise ValueError('No GW1 levels found for animation banks')
-    return max(levels, key=lambda level: (Path(game) / 'Data' / (level['package'] + '.sb')).stat().st_size)['package']
+    return max(levels, key=lambda level: (Path(game) / 'Data' / (level + '.sb')).stat().st_size)
 
 
 def cache_dir(game, kind):
@@ -80,8 +91,7 @@ def extract_banks(game, kind, folder):
     if kind == 'gw1':
         # GW1 keeps each Garden Ops enemy's clips in the banks of the levels it appears in (Grave Digger
         # isn't in Mainstreet's), so every level is read; a bank shared by several levels is kept once.
-        import gw1
-        tocs = [Path(game) / 'Data' / (level['package'] + '.toc') for level in gw1.discover(game)]
+        tocs = [Path(game) / 'Data' / (level + '.toc') for level in _level_files(game)]
     else:
         tocs = [Path(game) / 'Data' / (level_for(game, kind) + '.toc')]
     sizes, levels = {}, {}
