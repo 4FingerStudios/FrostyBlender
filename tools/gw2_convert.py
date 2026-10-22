@@ -51,6 +51,26 @@ class Gw2Archive(Archive):
                 self.by_guid[asset.get('guid') or doc['guid']] = (asset, doc)
 
 
+def light_values(obj):
+    """A point or spot light as plain values: colour (0..1 hue), strength, reach and cone (degrees)."""
+    c = obj.get('Color') or {}
+    color = [float(c.get(axis, 0.0)) for axis in 'xyz']
+    peak = max(color)
+    if peak <= 0 or float(obj.get('Intensity', 0.0)) <= 0:
+        return None
+    out = {'type': 'SPOT' if obj['$type'] == 'SpotLightEntityData' else 'POINT',
+           'color': [v / peak for v in color], 'intensity': float(obj['Intensity']) * peak,
+           'radius': float(obj.get('Radius', 10.0)), 'size': float(obj.get('Width', 0.0))}
+    if out['type'] == 'SPOT':
+        if obj.get('Shape') == 1 and obj.get('FrustumFov'):  # frustum spots use their field of view
+            out['cone_outer'] = float(obj['FrustumFov'])
+            out['cone_inner'] = 0.0
+        else:
+            out['cone_outer'] = float(obj.get('ConeOuterAngle', 45.0))
+            out['cone_inner'] = float(obj.get('ConeInnerAngle', 0.0))
+    return out
+
+
 def mesh_sections(archive, resource, skinned=False):
     """Drawable LOD0 sections. Skinned meshes (characters, cosmetics) share the rigid layout;
     with skinned=True they come back in their bind pose with a 'skin' of skeleton bone indices
@@ -387,6 +407,64 @@ class Gw2Converter(Converter):
             raise ValueError('GW2 editor spawn has no generated collision floor')
         return max(heights)
 
+    def environment(self, environments):
+        """Sun, sky and fog of the level's main visual environment (the highest priority one with an outdoor
+        light), as plain values for the importer. Empty when the level has none."""
+        def components(target):
+            doc, blueprint = target
+            entity = self.archive.resolve(doc, blueprint.get('Object'))
+            if not entity:
+                return {}
+            found = {}
+            for ref in entity[1].get('Components', []):
+                part = self.archive.resolve(entity[0], ref)
+                if part and not part[1].get('Excluded'):
+                    found[part[1]['$type']] = part
+            return found
+        # The map's main environment has a sky; smaller ones (VisEnv_..._MiningArea) only nudge the light
+        # inside an area, so they lose to it whatever their priority.
+        best = None
+        for priority, source, target in sorted(environments, key=lambda e: -e[0]):
+            parts = components(target)
+            if 'OutdoorLightComponentData' not in parts:
+                continue
+            rank = ('SkyComponentData' in parts, 'FogComponentData' in parts, priority)
+            if best is None or rank > best[0]:
+                best = (rank, target, parts)
+        if best is None:
+            return {}
+        best = best[1:]
+        if best is None:
+            return {}
+        target, parts = best
+        def vec(value):
+            return [float(value.get(axis, 0.0)) for axis in 'xyz'] if isinstance(value, dict) else None
+        light = parts['OutdoorLightComponentData'][1]
+        out = {'environment': target[1].get('Name', ''),
+               'sun_color': vec(light.get('SunColor')), 'sky_color': vec(light.get('SkyColor')),
+               'ground_color': vec(light.get('GroundColor')),
+               'sun_rotation': [float(light.get('SunRotationX', 0.0)), float(light.get('SunRotationY', 45.0))]}
+        if 'SkyComponentData' in parts:
+            sdoc, sky = parts['SkyComponentData']
+            out['sky_brightness'] = float(sky.get('BrightnessScale', 1.0))
+            texture = self.archive.resolve(sdoc, sky.get('PanoramicTexture'))
+            path = self.texture(texture[0]['guid']) if texture else None
+            if path:
+                out['sky_texture'] = path
+                out['sky_uv'] = [float(sky.get(k, d)) for k, d in (('PanoramicUVMinX', 0.0), ('PanoramicUVMaxX', 1.0),
+                                                                   ('PanoramicUVMinY', 0.0), ('PanoramicUVMaxY', 1.0))]
+                out['sky_rotation'] = float(sky.get('PanoramicRotation', 0.0))
+                out['sky_tile'] = float(sky.get('PanoramicTileFactor', 1.0))
+        if 'FogComponentData' in parts:
+            fog = parts['FogComponentData'][1]
+            out['fog_color'] = vec(fog.get('FogColor'))
+            out['fog_start'] = float(fog.get('Start', 0.0))
+            out['fog_end'] = float(fog.get('End', 0.0))
+            curve = fog.get('Curve')
+            if isinstance(curve, dict):
+                out['fog_curve'] = [float(curve.get(axis, 0.0)) for axis in 'xyzw']
+        return {k: v for k, v in out.items() if v is not None}
+
     def scene(self, map_name, choice=''):
         """choice picks one map of a level and its time of day ('1', 'night', '1-night'; see variants.py)."""
         gw1 = getattr(self.archive, 'inventory', {}).get('profile') == 'gw1'
@@ -566,9 +644,21 @@ class Gw2Converter(Converter):
                 local = obj.get('BlueprintTransform',obj.get('Transform'))
                 if local:
                     starts.append((transform @ matrix(local))[:3,3])
+            elif kind in ('VisualEnvironmentReferenceObjectData', 'LogicVisualEnvironmentReferenceObjectData'):
+                # The level's sun, sky and fog. The chosen map's sub-worlds reference its own (day or night).
+                target = self.archive.resolve(doc, obj.get('Blueprint'))
+                if target:
+                    environments.append((obj.get('Priority', 0), source, target))
+            elif kind in ('PointLightEntityData', 'SpotLightEntityData') and obj.get('Visible', True):
+                light = light_values(obj)
+                if light:
+                    places.append({'kind': 'frostbite_light', 'name': kind.replace('EntityData', ''),
+                                   'matrix': (transform @ matrix(obj['Transform'])).tolist(), 'values': light,
+                                   'tags': {'level_instance': source, 'profile': 'gw2'}})
             else:
                 self.skipped[kind] = self.skipped.get(kind, 0) + 1
         layers = sorted(self.archive.documents.items(), key=lambda item:item[1][0].get('root_type') != 'SubWorldData')
+        environments = []
         import variants
         keep = variants.included_subworlds(self.archive.documents, choice)
         worlds = {name.lower() for name, (asset, doc) in self.archive.documents.items()
@@ -606,8 +696,10 @@ class Gw2Converter(Converter):
             except ValueError:
                 spawn = centres[0].tolist()
                 spawn[1] = self.floor_at(spawn[0], spawn[2], spawn[1]+2) + .5
+        outdoor = {'stream_load_distance': 2048, 'stream_unload_distance': 2400, 'sun_intensity': 2.4}
+        outdoor.update(self.environment(environments))
         places.insert(0, {'kind': 'frostbite_environment', 'name': 'GW2 outdoor settings', 'at': [0, 0, 0],
-                          'values': {'stream_load_distance': 2048, 'stream_unload_distance': 2400, 'sun_intensity': 2.4}, 'tags': {}})
+                          'values': outdoor, 'tags': {}})
         places.insert(0, {'kind': 'spawn', 'name': 'GW2 editor spawn', 'at': spawn, 'values': {}, 'tags': {}})
         report = {'profile': 'gw2', 'map': map_name, 'layers': roots, 'placements': len(places),
                   'meshes': len(self.meshes), 'materials': len(self.materials), 'textures': len(self.texture_paths),

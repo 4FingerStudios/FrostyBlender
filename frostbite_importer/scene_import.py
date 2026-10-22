@@ -9,13 +9,14 @@ skeleton becomes one armature in its bind pose, and the meshes are parented to i
 Armature modifier and a vertex group per bone.
 """
 import json
+import math
 import os
 import time
 from pathlib import Path
 
 import bpy
 import numpy as np
-from mathutils import Matrix
+from mathutils import Matrix, Vector
 
 from . import amsh
 from .materials import build_material
@@ -342,6 +343,9 @@ class Importer:
                         self.warnings.append('%s: %s' % (place.get('name'), error))
                 elif kind == 'frostbite_environment' and self.add_lighting:
                     self.environment(context, root, place.get('values', {}))
+                elif kind == 'frostbite_light' and self.add_lighting:
+                    self.light(place, root)
+                    count += 1
         finally:
             wm.progress_end()
         for space in (a.spaces.active for w in wm.windows for a in w.screen.areas if a.type == 'VIEW_3D'):
@@ -354,17 +358,180 @@ class Importer:
         return root
 
     def environment(self, context, root, values):
+        """The level's sun, sky and fog. GW1/GW2 maps carry the game's own values (see gw2_convert.environment);
+        others get a neutral daylight sun and sky."""
         sun = bpy.data.lights.new('Frostbite sun', 'SUN')
-        sun.energy = float(values.get('sun_intensity', 2.4)) * 1.5
         sun.angle = 0.02
         ob = bpy.data.objects.new('Frostbite sun', sun)
-        ob.rotation_euler = (0.85, 0.0, 0.6)
+        color = values.get('sun_color')
+        if color and max(color) > 0:
+            peak = max(color)
+            sun.color = [c / peak for c in color]
+            sun.energy = min(max(peak * 2.0, 0.05), 10.0)
+            azimuth, elevation = (math.radians(a) for a in values.get('sun_rotation', (0.0, 45.0)))
+            # Frostbite's sun sits at this azimuth and elevation (Y up); the light travels away from it.
+            to_sun = Vector((math.cos(elevation) * math.sin(azimuth), math.sin(elevation),
+                             math.cos(elevation) * math.cos(azimuth)))
+            travel = -Vector((to_sun.x, -to_sun.z, to_sun.y))
+            ob.rotation_euler = travel.to_track_quat('-Z', 'Y').to_euler()
+        else:
+            sun.energy = float(values.get('sun_intensity', 2.4)) * 1.5
+            ob.rotation_euler = (0.85, 0.0, 0.6)
+        if values.get('environment'):
+            ob['frostbite_environment'] = values['environment']
         root.objects.link(ob)
         world = context.scene.world or bpy.data.worlds.new('World')
         context.scene.world = world
         world.use_nodes = True
-        bg = world.node_tree.nodes.get('Background')
-        if bg:
-            bg.inputs['Color'].default_value = (0.55, 0.7, 0.9, 1.0)
-            bg.inputs['Strength'].default_value = 0.6
+        if not values.get('sky_color'):
+            bg = world.node_tree.nodes.get('Background')
+            if bg:
+                bg.inputs['Color'].default_value = (0.55, 0.7, 0.9, 1.0)
+                bg.inputs['Strength'].default_value = 0.6
+            return
+        self.game_sky(context, world, values)
+
+    def game_sky(self, context, world, values):
+        """World nodes: the game's ambient sky/ground colours light the scene, its panoramic sky texture is what
+        the camera sees, and its fog fades distant geometry into the fog colour."""
+        nt = world.node_tree
+        nt.nodes.clear()
+        n, link = nt.nodes, nt.links.new
+
+        def node(kind, x, y, **settings):
+            made = n.new(kind)
+            made.location = (x, y)
+            for key, value in settings.items():
+                setattr(made, key, value)
+            return made
+
+        def math_node(op, a, b=None, x=0, y=0):
+            made = node('ShaderNodeMath', x, y, operation=op)
+            for i, value in enumerate((a, b)):
+                if value is None:
+                    continue
+                if isinstance(value, bpy.types.NodeSocket):
+                    link(value, made.inputs[i])
+                else:
+                    made.inputs[i].default_value = value
+            return made.outputs[0]
+
+        coords = node('ShaderNodeTexCoord', -1400, 0)
+        direction = node('ShaderNodeSeparateXYZ', -1200, 0)
+        link(coords.outputs['Generated'], direction.inputs[0])
+        # Ambient: ground colour below the horizon blending into the sky colour above it.
+        up = math_node('MULTIPLY_ADD', direction.outputs['Z'], 0.5, x=-1000, y=200)
+        up.node.inputs[2].default_value = 0.5
+        ambient = node('ShaderNodeMix', -800, 200, data_type='RGBA')
+        link(up, ambient.inputs['Factor'])
+        ambient.inputs['A'].default_value = (*values.get('ground_color', (0.05, 0.05, 0.05)), 1.0)
+        ambient.inputs['B'].default_value = (*values['sky_color'], 1.0)
+        light_bg = node('ShaderNodeBackground', -600, 200)
+        link(ambient.outputs['Result'], light_bg.inputs['Color'])
+        light_bg.inputs['Strength'].default_value = 3.0  # the game's ambient values are small and scene-referred
+        seen = light_bg
+        path = values.get('sky_texture')
+        if path and (self.assets / path).is_file():
+            # The panorama wraps around by azimuth. Its UV range says which band of the sky dome it covers, with
+            # dome V running 0 at the zenith, 0.5 at the horizon: [0, 0.5] is the whole upper half.
+            u_min, u_max, v_min, v_max = values.get('sky_uv', (0.0, 1.0, 0.0, 0.5))
+            azimuth = math_node('ARCTAN2', direction.outputs['Y'], direction.outputs['X'], x=-1000, y=-150)
+            u = math_node('MULTIPLY_ADD', azimuth, 1.0 / (2 * math.pi), x=-850, y=-150)
+            u.node.inputs[2].default_value = 0.5 + float(values.get('sky_rotation', 0.0))
+            u = math_node('MULTIPLY', u, float(values.get('sky_tile', 1.0)) * (u_max - u_min), x=-700, y=-150)
+            u = math_node('ADD', u, u_min, x=-560, y=-150)
+            height = math_node('ARCSINE', math_node('MAXIMUM', direction.outputs['Z'], 0.0, x=-1000, y=-320), x=-850, y=-320)
+            dome = math_node('MULTIPLY_ADD', height, -0.5 / (math.pi / 2), x=-700, y=-320)  # 0 zenith .. 0.5 horizon
+            dome.node.inputs[2].default_value = 0.5
+            v = math_node('MULTIPLY_ADD', dome, 1.0 / max(v_max - v_min, 1e-4), x=-560, y=-320)
+            v.node.inputs[2].default_value = -v_min / max(v_max - v_min, 1e-4)
+            v = math_node('SUBTRACT', 1.0, v, x=-420, y=-320)  # Blender's image V runs upwards
+            v.node.use_clamp = True
+            uv = node('ShaderNodeCombineXYZ', -150, -200)
+            link(u, uv.inputs['X'])
+            link(v, uv.inputs['Y'])
+            image = node('ShaderNodeTexImage', 0, -200, extension='REPEAT', interpolation='Linear')
+            image.image = bpy.data.images.load(str(self.assets / path), check_existing=True)
+            link(uv.outputs['Vector'], image.inputs['Vector'])
+            camera_bg = node('ShaderNodeBackground', 300, -200)
+            link(image.outputs['Color'], camera_bg.inputs['Color'])
+            camera_bg.inputs['Strength'].default_value = float(values.get('sky_brightness', 1.0))
+            ray = node('ShaderNodeLightPath', 300, 300)
+            pick = node('ShaderNodeMixShader', 550, 0)
+            link(ray.outputs['Is Camera Ray'], pick.inputs['Fac'])
+            link(light_bg.outputs['Background'], pick.inputs[1])
+            link(camera_bg.outputs['Background'], pick.inputs[2])
+            seen = pick
+        out = node('ShaderNodeOutputWorld', 800, 0)
+        link(seen.outputs[0], out.inputs['Surface'])
+        start, end = float(values.get('fog_start', 0.0)), float(values.get('fog_end', 0.0))
+        if values.get('fog_color') and end > start >= 0:
+            curve = values.get('fog_curve')
+            peak = min(max(sum(curve) if curve else 0.8, 0.05), 0.95)
+            try:
+                self.fog(context, world, values['fog_color'], start, end, peak)
+            except (AttributeError, RuntimeError, KeyError, TypeError) as error:
+                self.warnings.append('fog not set up: %s' % error)
+        world['frostbite_environment'] = values.get('environment', '')
+
+    def fog(self, context, world, color, start, end, peak):
+        """The game's distance fog as a compositor step on the mist pass: pixels fade toward the fog colour from
+        the fog start, reaching `peak` (the game's curve tops out near 80%) at the fog end. A world volume would
+        also dim the sun in EEVEE, so the fog lives in the compositor and shows in renders, not the viewport."""
+        scene = context.scene
+        world.mist_settings.start = start
+        world.mist_settings.depth = max(end - start, 1.0)
+        world.mist_settings.falloff = 'LINEAR'
+        for layer in scene.view_layers:
+            layer.use_pass_mist = True
+        if hasattr(scene, 'compositing_node_group'):  # Blender 5: the compositor is a node group
+            tree = bpy.data.node_groups.new('Frostbite fog', 'CompositorNodeTree')
+            tree.interface.new_socket('Image', in_out='OUTPUT', socket_type='NodeSocketColor')
+            output = tree.nodes.new('NodeGroupOutput')
+            target = output.inputs[0]
+            scene.compositing_node_group = tree
+        else:  # Blender 4.x
+            scene.use_nodes = True
+            tree = scene.node_tree
+            tree.nodes.clear()
+            output = tree.nodes.new('CompositorNodeComposite')
+            target = output.inputs['Image']
+        layers = tree.nodes.new('CompositorNodeRLayers')
+        amount = tree.nodes.new('ShaderNodeMath')
+        amount.operation = 'MULTIPLY'
+        amount.inputs[1].default_value = peak
+        tree.links.new(layers.outputs['Mist'], amount.inputs[0])
+        mix = tree.nodes.new('ShaderNodeMix')
+        mix.data_type = 'RGBA'
+        tree.links.new(amount.outputs[0], mix.inputs['Factor'])
+        tree.links.new(layers.outputs['Image'], mix.inputs['A'])
+        mix.inputs['B'].default_value = (*color, 1.0)
+        tree.links.new(mix.outputs['Result'], target)
+        layers.location, amount.location, mix.location, output.location = (-400, 0), (-150, 150), (50, 0), (300, 0)
+        scene['frostbite_fog'] = 'Compositor: %s, fog %.0f-%.0f m' % (tree.name, start, end)
+
+    def light(self, place, root):
+        """A game point or spot light. Strength is the game's intensity in watts-ish units, reach is its radius."""
+        values = place.get('values', {})
+        kind = 'SPOT' if values.get('type') == 'SPOT' else 'POINT'
+        light = bpy.data.lights.new(place.get('name', 'Frostbite light'), kind)
+        light.color = values.get('color', (1.0, 1.0, 1.0))
+        light.energy = min(float(values.get('intensity', 10.0)) * 10.0, 100000.0)
+        light.shadow_soft_size = max(float(values.get('size', 0.0)) * 0.5, 0.05)
+        if hasattr(light, 'use_custom_distance'):
+            light.use_custom_distance = True
+            light.cutoff_distance = max(float(values.get('radius', 10.0)), 0.1)
+        if kind == 'SPOT':
+            outer = min(max(float(values.get('cone_outer', 45.0)), 1.0), 180.0)
+            light.spot_size = math.radians(outer)
+            light.spot_blend = min(max(1.0 - float(values.get('cone_inner', 0.0)) / outer, 0.0), 1.0)
+        ob = bpy.data.objects.new(place.get('name', 'Frostbite light'), light)
+        # Frostbite spots shine along -forward, which is Blender's local +Y here; Blender spots shine along -Z.
+        ob.matrix_world = AXIS4 @ Matrix(place['matrix']) @ AXIS4.inverted() @ Matrix.Rotation(math.radians(90), 4, 'X')
+        ob.scale = (1.0, 1.0, 1.0)
+        lights = bpy.data.collections.get(root.name + ' lights')
+        if lights is None:
+            lights = bpy.data.collections.new(root.name + ' lights')
+            root.children.link(lights)
+        lights.objects.link(ob)
 
