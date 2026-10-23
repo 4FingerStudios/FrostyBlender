@@ -316,6 +316,10 @@ public partial class MainViewModel
             if (info["ebx_bytes"] is { } eb) ExplorerFields.Add(new ExplorerField("EBX size", $"{eb.GetValue<long>():N0} bytes"));
             if (info["resource_bytes"] is { } rb) ExplorerFields.Add(new ExplorerField("Resource size", $"{rb.GetValue<long>():N0} bytes"));
             if (info["objects"] is { } objects) ExplorerFields.Add(new ExplorerField("Objects", objects.ToString()));
+            if (info["images"] is { } images)
+                ExplorerFields.Add(new ExplorerField("Images", images.GetValue<int>() == 1 ? "Exports 1 image" : $"Exports {images.GetValue<int>():N0} images"));
+            if (info["movie"]?["shapes"] is { } shapes)
+                ExplorerFields.Add(new ExplorerField("Vector shapes", $"{shapes.GetValue<int>():N0} (not exported)"));
             foreach (var (key, value) in info["fields"]?.AsObject() ?? new JsonObject())
                 ExplorerFields.Add(new ExplorerField(key, value is JsonValue v ? v.ToString() : value?.ToJsonString() ?? ""));
             foreach (var name in info["imports"]?.AsArray() ?? new JsonArray())

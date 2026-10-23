@@ -6,6 +6,10 @@ from the scene time which particles are alive, where they are (velocity, gravity
 exactly) and how big, then instances a camera-facing quad (or the emitter's mesh) on each. The
 material reads the particle's age to apply the colour and transparency curves and to pick the
 flipbook frame. Nothing is cached, so the timeline scrubs both ways.
+
+Particles caught by world wind carry how far one m/s of wind has moved them; the effect's "Wind (m/s)"
+property (on its empty) drives every emitter. Heat-haze emitters draw with a refraction material, lights
+are animated over the effect's life, and sounds are added as sound strips in the Sequencer.
 """
 import json
 import math
@@ -119,6 +123,37 @@ def _colors(samples):
     return colors, strengths
 
 
+def _sprite(t, emitter, image, instancer, source):
+    """The image texture node showing the particle's flipbook cell, flipped as the particle says."""
+    tex = t.node('ShaderNodeTexImage', image=image, extension='EXTEND')
+    frames, columns = emitter['frames'], emitter['columns']
+    flips = any(any(f) for f in emitter['particles'].get('flip', []))
+    if source != 'INSTANCER':
+        frames = 1  # ribbons run the texture along their length
+    if frames > 1 or flips:
+        uv = t.node('ShaderNodeTexCoord').outputs['UV']
+        sep = t.node('ShaderNodeSeparateXYZ')
+        t.link(uv, sep.inputs[0])
+        u, v = sep.outputs['X'], sep.outputs['Y']
+        if flips:  # u' = u + flip * (1 - 2u)
+            flip = t.node('ShaderNodeSeparateXYZ')
+            t.link(instancer('fx_flip', 'Vector'), flip.inputs[0])
+            u = t.math('ADD', u, t.math('MULTIPLY', flip.outputs['X'], t.math('MULTIPLY_ADD', u, -2.0, 1.0)))
+            v = t.math('ADD', v, t.math('MULTIPLY', flip.outputs['Y'], t.math('MULTIPLY_ADD', v, -2.0, 1.0)))
+        if frames > 1:
+            rows = math.ceil(frames / columns)
+            cell = instancer('fx_cell')
+            col = t.math('FLOORED_MODULO', cell, columns)
+            row = t.math('FLOOR', t.math('DIVIDE', cell, columns))
+            u = t.math('DIVIDE', t.math('ADD', u, col), columns)
+            v = t.math('DIVIDE', t.math('ADD', v, t.math('SUBTRACT', rows - 1, row)), rows)
+        join = t.node('ShaderNodeCombineXYZ')
+        t.link(u, join.inputs['X'])
+        t.link(v, join.inputs['Y'])
+        t.link(join.outputs['Vector'], tex.inputs['Vector'])
+    return tex
+
+
 def particle_material(name, emitter, image, source='INSTANCER'):
     mat = bpy.data.materials.new(name[:60])
     mat.use_nodes = True
@@ -170,32 +205,7 @@ def particle_material(name, emitter, image, source='INSTANCER'):
         alpha = t.math('MULTIPLY', alpha, t.math('MULTIPLY', blob, blob))
 
     if image is not None:
-        tex = t.node('ShaderNodeTexImage', image=image, extension='EXTEND')
-        frames, columns = emitter['frames'], emitter['columns']
-        flips = any(any(f) for f in emitter['particles'].get('flip', []))
-        if source != 'INSTANCER':
-            frames = 1  # ribbons run the texture along their length
-        if frames > 1 or flips:
-            uv = t.node('ShaderNodeTexCoord').outputs['UV']
-            sep = t.node('ShaderNodeSeparateXYZ')
-            t.link(uv, sep.inputs[0])
-            u, v = sep.outputs['X'], sep.outputs['Y']
-            if flips:  # u' = u + flip * (1 - 2u)
-                flip = t.node('ShaderNodeSeparateXYZ')
-                t.link(instancer('fx_flip', 'Vector'), flip.inputs[0])
-                u = t.math('ADD', u, t.math('MULTIPLY', flip.outputs['X'], t.math('MULTIPLY_ADD', u, -2.0, 1.0)))
-                v = t.math('ADD', v, t.math('MULTIPLY', flip.outputs['Y'], t.math('MULTIPLY_ADD', v, -2.0, 1.0)))
-            if frames > 1:
-                rows = math.ceil(frames / columns)
-                cell = instancer('fx_cell')
-                col = t.math('FLOORED_MODULO', cell, columns)
-                row = t.math('FLOOR', t.math('DIVIDE', cell, columns))
-                u = t.math('DIVIDE', t.math('ADD', u, col), columns)
-                v = t.math('DIVIDE', t.math('ADD', v, t.math('SUBTRACT', rows - 1, row)), rows)
-            join = t.node('ShaderNodeCombineXYZ')
-            t.link(u, join.inputs['X'])
-            t.link(v, join.inputs['Y'])
-            t.link(join.outputs['Vector'], tex.inputs['Vector'])
+        tex = _sprite(t, emitter, image, instancer, source)
         mix = t.node('ShaderNodeMix', data_type='RGBA', blend_type='MULTIPLY')
         mix.inputs['Factor'].default_value = 1
         t.link(color, mix.inputs['A'])
@@ -216,6 +226,61 @@ def particle_material(name, emitter, image, source='INSTANCER'):
     t.link(clear.outputs[0], mix.inputs[1])
     t.link(shader.outputs[0], mix.inputs[2])
     t.link(mix.outputs[0], out.inputs['Surface'])
+    return mat
+
+
+def haze_material(name, emitter, image, source='INSTANCER'):
+    """Heat haze: a clear refraction whose surface is bent by the sprite (as a height map) and whose strength
+    follows the particle's transparency, so what is behind it shimmers. Works in Cycles; EEVEE needs ray
+    tracing (switched on by build) to refract the scene rather than the world."""
+    mat = bpy.data.materials.new((name[:54] + ' haze'))
+    mat.use_nodes = True
+    mat.use_backface_culling = False
+    for attr, value in (('surface_render_method', 'DITHERED'), ('blend_method', 'HASHED'),
+                        ('use_raytrace_refraction', True), ('use_screen_refraction', True), ('thickness_mode', 'SLAB')):
+        if hasattr(mat, attr):
+            try:
+                setattr(mat, attr, value)
+            except (TypeError, AttributeError):
+                pass
+    t = Tree(mat.node_tree)
+    t.nodes.clear()
+    out = t.node('ShaderNodeOutputMaterial')
+
+    def instancer(attribute, kind='Fac'):
+        return t.node('ShaderNodeAttribute', attribute_type=source, attribute_name=attribute).outputs[kind]
+    age = instancer('fx_age')
+    alpha = t.curve(age, emitter['curves']['alpha']) if emitter['curves'].get('alpha') else 1.0
+    if emitter['particles'].get('alpha_track'):
+        alpha = t.math('MULTIPLY', alpha, instancer('fx_alpha'))
+    strength = float(emitter.get('distortion') or 1.0)
+    refract = t.node('ShaderNodeBsdfRefraction')
+    refract.inputs['Color'].default_value = (1, 1, 1, 1)
+    refract.inputs['Roughness'].default_value = 0.0
+    if image is not None:
+        tex = _sprite(t, emitter, image, instancer, source)
+        gray = t.node('ShaderNodeRGBToBW')
+        t.link(tex.outputs['Color'], gray.inputs[0])
+        height = t.math('MULTIPLY', tex.outputs['Alpha'], gray.outputs[0])
+        bump = t.node('ShaderNodeBump')
+        bump.inputs['Distance'].default_value = 0.2
+        t.set(bump.inputs['Strength'], t.math('MINIMUM', t.math('MULTIPLY', alpha, strength), 1.0))
+        t.link(height, bump.inputs['Height'])
+        t.link(bump.outputs['Normal'], refract.inputs['Normal'])
+        refract.inputs['IOR'].default_value = 1.0 + 0.06 * strength
+        cover = t.math('MULTIPLY', alpha, t.math('MULTIPLY', tex.outputs['Alpha'], 4.0))
+    else:  # a mesh (a shockwave): its own curvature bends the view, most where it is seen edge-on
+        refract.inputs['IOR'].default_value = 1.0 + 0.015 * strength
+        edge = t.node('ShaderNodeLayerWeight')
+        edge.inputs['Blend'].default_value = 0.5
+        cover = t.math('MULTIPLY', alpha, t.math('MULTIPLY', edge.outputs['Facing'], 0.8))
+    clear = t.node('ShaderNodeBsdfTransparent')
+    mix = t.node('ShaderNodeMixShader')
+    t.set(mix.inputs['Fac'], t.math('MINIMUM', t.math('MAXIMUM', cover, 0.0), 1.0))
+    t.link(clear.outputs[0], mix.inputs[1])
+    t.link(refract.outputs[0], mix.inputs[2])
+    t.link(mix.outputs[0], out.inputs['Surface'])
+    mat['frostbite_heat_haze'] = strength
     return mat
 
 
@@ -374,6 +439,14 @@ def _interface(group, emitter, camera):
     period.default_value = max(emitter['duration'], 0.1)
     speed = face.new_socket('Speed', in_out='INPUT', socket_type='NodeSocketFloat')
     speed.default_value = 1.0
+    if emitter['particles'].get('wind_track'):
+        wind = face.new_socket(WIND_SOCKET, in_out='INPUT', socket_type='NodeSocketVector')
+        wind.description = "World wind that carries these particles (driven by the effect's Wind property)"
+        wind.default_value = DEFAULT_WIND
+
+
+WIND_SOCKET = 'Wind (m/s)'
+DEFAULT_WIND = (3.0, 0.0, 0.0)
 
 
 def _store(t, geometry, name, value, kind='FLOAT', domain='POINT'):
@@ -414,6 +487,14 @@ def tracked_nodes(name, emitter, instance, camera, ribbon_material=None):
     p0, p1 = sample(here, first), sample(here, t.math('ADD', first, 1.0))
     position = t.vmath('ADD', p0, t.vmath('SCALE', t.vmath('SUBTRACT', p1, p0), scale=weight))
     velocity = t.vmath('SCALE', t.vmath('SUBTRACT', p1, p0), scale=t.math('DIVIDE', keys - 1, life))
+    if p.get('wind_track'):  # carried by the wind: metres per m/s of wind, recorded per path point
+        w0 = sample(t.attribute('fx_k_wind'), first, 'FLOAT')
+        w1 = sample(t.attribute('fx_k_wind'), t.math('ADD', first, 1.0), 'FLOAT')
+        drift = t.math('ADD', w0, t.math('MULTIPLY', t.math('SUBTRACT', w1, w0), weight))
+        wind = gi.outputs[WIND_SOCKET]
+        position = t.vmath('ADD', position, t.vmath('SCALE', wind, scale=drift))
+        rate = t.math('DIVIDE', t.math('SUBTRACT', w1, w0), t.math('DIVIDE', life, keys - 1))
+        velocity = t.vmath('ADD', velocity, t.vmath('SCALE', wind, scale=rate))
     a0 = sample(t.attribute('fx_angle'), first, 'FLOAT')
     a1 = sample(t.attribute('fx_angle'), t.math('ADD', first, 1.0), 'FLOAT')
     angle = t.math('ADD', a0, t.math('MULTIPLY', t.math('SUBTRACT', a1, a0), weight))
@@ -453,7 +534,8 @@ def tracked_nodes(name, emitter, instance, camera, ribbon_material=None):
 
     dead = t.node('FunctionNodeBooleanMath', operation='OR')
     t.link(t.math('LESS_THAN', age, 0.0), dead.inputs[0])
-    t.link(t.math('GREATER_THAN', fraction, 1.0), dead.inputs[1])
+    # Past its life, or past the point where a collision killed it.
+    t.link(t.math('GREATER_THAN', fraction, t.attribute('fx_end') if p.get('end') else 1.0), dead.inputs[1])
     gone = t.node('FunctionNodeBooleanMath', operation='OR')
     t.link(dead.outputs[0], gone.inputs[0])
     t.link(t.math('GREATER_THAN', index, count - 0.5), gone.inputs[1])  # the path points
@@ -618,8 +700,11 @@ def emitter_object(importer, emitter, name, collection, holder, camera):
             flip[:, :2] = np.asarray(p['flip'], np.float64)
         add('fx_flip', flip, 'FLOAT_VECTOR')
         # Per-particle tracks sit on the path points; the particle points repeat their first key.
+        if p.get('end'):
+            add('fx_end', p['end'])
         for track, attr in (('size_track', 'fx_k_size'), ('color_track', 'fx_k_color'), ('alpha_track', 'fx_k_alpha'),
-                            ('glow_track', 'fx_k_glow'), ('cell_track', 'fx_k_cell'), ('euler_track', 'fx_k_euler')):
+                            ('glow_track', 'fx_k_glow'), ('cell_track', 'fx_k_cell'), ('euler_track', 'fx_k_euler'),
+                            ('wind_track', 'fx_k_wind')):
             if p.get(track):
                 values = np.asarray(p[track], np.float32)
                 values = np.concatenate([values[:, 0], values.reshape((-1,) + values.shape[2:])])
@@ -632,6 +717,8 @@ def emitter_object(importer, emitter, name, collection, holder, camera):
     collection.objects.link(ob)
     ob.parent = holder
     ob['frostbite_emitter'] = emitter['name']
+    if emitter.get('distortion') and hasattr(ob, 'visible_shadow'):
+        ob.visible_shadow = False  # heat haze bends light; it must not shadow the flash at its centre
     if emitter.get('notes'):
         ob['frostbite_notes'] = '; '.join(emitter['notes'])
 
@@ -642,12 +729,16 @@ def emitter_object(importer, emitter, name, collection, holder, camera):
         except (OSError, ValueError, KeyError) as error:
             importer.warnings.append('%s: %s' % (name, error))
             emitter = dict(emitter, kind='quad')
+    draw = haze_material if emitter.get('distortion') else particle_material
     ribbon = None
     if tracked and emitter['kind'] == 'ribbon':
-        ribbon = particle_material(name, emitter, importer.image(emitter.get('texture')), 'GEOMETRY')
+        ribbon = draw(name, emitter, importer.image(emitter.get('texture')), 'GEOMETRY')
+    if emitter['kind'] == 'mesh' and emitter.get('mesh') and emitter.get('distortion'):
+        source.data.materials.clear()  # a heat-haze mesh (a shockwave) bends what is behind it
+        source.data.materials.append(draw(name, emitter, None))
     if emitter['kind'] != 'mesh' or not emitter.get('mesh'):
         quad = _quad(name[:54] + ' quad')
-        quad.materials.append(ribbon or particle_material(name, emitter, importer.image(emitter.get('texture'))))
+        quad.materials.append(ribbon or draw(name, emitter, importer.image(emitter.get('texture'))))
         source = bpy.data.objects.new(name[:54] + ' quad', quad)
     collection.objects.link(source)
     source.parent = holder
@@ -657,6 +748,8 @@ def emitter_object(importer, emitter, name, collection, holder, camera):
     mod = ob.modifiers.new('Frostbite particles', 'NODES')
     mod.node_group = tracked_nodes(name, emitter, source, camera, ribbon) if tracked else \
         particle_nodes(name, emitter, source, camera)
+    if tracked and p.get('wind_track'):
+        _drive_wind(mod, holder)
     if camera is not None:
         for socket in mod.node_group.interface.items_tree:
             if getattr(socket, 'in_out', '') == 'INPUT' and socket.name == 'Camera':
@@ -667,33 +760,142 @@ def emitter_object(importer, emitter, name, collection, holder, camera):
     return ob
 
 
+def _drive_wind(mod, holder):
+    """The emitter's wind input follows its effect's "Wind (m/s)" property."""
+    socket = next((i for i in mod.node_group.interface.items_tree
+                   if getattr(i, 'in_out', '') == 'INPUT' and i.name == WIND_SOCKET), None)
+    if socket is None:
+        return
+    value = getattr(getattr(getattr(mod, 'properties', None), 'inputs', None), socket.identifier, None)
+    if value is None:  # before Blender 5.2 a modifier keeps its inputs as ID properties, once set
+        mod[socket.identifier] = DEFAULT_WIND
+    for axis in range(3):
+        curve = value.driver_add('value', axis) if value is not None else \
+            mod.driver_add('["%s"]' % socket.identifier, axis)
+        curve.driver.type = 'AVERAGE'
+        var = curve.driver.variables.new()
+        var.targets[0].id = holder
+        var.targets[0].data_path = '["%s"][%d]' % (WIND_PROPERTY, axis)
+
+
+WIND_PROPERTY = 'Wind (m/s)'
+FLICKER_STEP = 2  # frames between flicker values
+LIGHT_FROM_FROSTBITE = Matrix(((-1, 0, 0, 0), (0, 1, 0, 0), (0, 0, -1, 0), (0, 0, 0, 1)))  # light shines down -Z
+
+
+def _light_values(light, fps, rng):
+    """[(frame offset, multiplier)] over the light's life: its intensity curve times its flicker."""
+    curve = light.get('curve') or [1.0]
+    life = light['lifetime'] if light['lifetime'] > 0 else (1.0 if light.get('flicker') else 0.0)
+    if life <= 0:
+        return [(0.0, curve[0])]
+    frames = max(int(round(life * fps)), 1)
+    step = FLICKER_STEP if light.get('flicker') else max(1, frames // (len(curve) - 1 or 1))
+    out = []
+    for f in list(range(0, frames, step)) + [frames]:
+        x = f / frames * (len(curve) - 1)
+        i = min(int(x), len(curve) - 2) if len(curve) > 1 else 0
+        v = curve[i] + (curve[i + 1] - curve[i]) * (x - i) if len(curve) > 1 else curve[0]
+        if light['lifetime'] <= 0:
+            v = curve[0]
+        if light.get('flicker'):
+            lo, hi = light['flicker']
+            v *= lo + (hi - lo) * rng.random() if f < frames else 1.0
+        out.append((float(f), max(float(v), 0.0)))
+    if light.get('flicker') and out:
+        out[-1] = (out[-1][0], out[0][1])  # a looping flicker joins up
+    return out
+
+
 def light_object(light, name, collection, holder, fps):
+    """A point or spot light parented to the effect, its energy keyed over the light's life: the intensity
+    curve, the flicker, a loop when it loops, and off before it starts and after it ends."""
     color = light['color']
     peak = max(max(color), 1e-6)
-    data = bpy.data.lights.new(name[:60], 'POINT')
+    spot = light.get('spot')
+    data = bpy.data.lights.new(name[:60], 'SPOT' if spot else 'POINT')
     data.color = [c / peak for c in color] if peak > 1 else color
-    data.shadow_soft_size = 0.25
+    data.shadow_soft_size = max(float(light.get('size') or 0), 0.05)
+    if spot:
+        outer = min(max(float(spot['outer']), 1.0), 180.0)
+        data.spot_size = math.radians(outer)
+        data.spot_blend = min(max(1.0 - float(spot.get('inner') or 0) / outer, 0.0), 1.0)
     if hasattr(data, 'use_custom_distance'):
         data.use_custom_distance = True
         data.cutoff_distance = light['radius']
-    energy = 25.0 * light['intensity'] * peak
+    # Garden Warfare intensities are small numbers; Battle for Neighborville's are physical (huge).
+    energy = (2e-5 if light.get('physical') else 25.0) * light['intensity'] * peak
     ob = bpy.data.objects.new(name[:60], data)
     collection.objects.link(ob)
     ob.parent = holder
-    ob.location = _to_blender([[0, 0, 0]], light['transform'])[0]
-    curve = light.get('curve') or [1.0]
-    if light['lifetime'] > 0 and not light.get('looping'):
-        start = 1 + light['delay'] * fps
+    ob.matrix_basis = AXIS4 @ Matrix(light['transform']) @ LIGHT_FROM_FROSTBITE  # where and which way it shines
+    ob.scale = (1, 1, 1)
+    ob['frostbite_light'] = light.get('type', '')
+    rng = np.random.default_rng(int.from_bytes(name.encode()[-8:].rjust(8, b'0'), 'little') & 0xFFFFFFFF)
+    values = _light_values(light, fps, rng)
+    start = 1 + light['delay'] * fps
+    if len(values) == 1 and light['delay'] <= 0 and light['lifetime'] <= 0:
+        data.energy = energy * values[0][1]
+        return ob
+    timed = light['lifetime'] > 0 and not light.get('looping')
+    if light['delay'] > 0 or timed:
         data.energy = 0
         data.keyframe_insert('energy', frame=start - 1)
-        for i, v in enumerate(curve):
-            data.energy = energy * v
-            data.keyframe_insert('energy', frame=start + i / max(len(curve) - 1, 1) * light['lifetime'] * fps)
+    for offset, v in values:
+        data.energy = energy * v
+        data.keyframe_insert('energy', frame=start + offset)
+    if timed:
         data.energy = 0
-        data.keyframe_insert('energy', frame=start + light['lifetime'] * fps + 1)
-    else:
-        data.energy = energy
+        data.keyframe_insert('energy', frame=start + values[-1][0] + 1)
+    curve = _fcurve(data, 'energy')
+    if curve is not None:
+        for key in curve.keyframe_points:
+            key.interpolation = 'LINEAR'
+        if not timed:  # a looping light (or a flicker that lasts the effect's life) repeats its keys
+            curve.modifiers.new('CYCLES')
+            if light['delay'] > 0:
+                curve.keyframe_points.remove(curve.keyframe_points[0])
     return ob
+
+
+def _fcurve(data, path):
+    """The F-curve animating `path` on `data` (actions moved to layered slots in Blender 4.4)."""
+    action = data.animation_data.action if data.animation_data else None
+    if action is None:
+        return None
+    curves = getattr(action, 'fcurves', None)
+    if curves is not None and len(curves):
+        return curves.find(path)
+    for layer in getattr(action, 'layers', []):
+        for strip in layer.strips:
+            for bag in getattr(strip, 'channelbags', []):
+                found = bag.fcurves.find(path)
+                if found is not None:
+                    return found
+    return None
+
+
+def sound_strips(scene, sounds, assets, label, fps, warnings):
+    """Each effect sound as a Sequencer sound strip from the effect's start (repeated to the scene's end when it
+    loops), on the first free channel. Returns the strip names."""
+    editor = scene.sequence_editor or scene.sequence_editor_create()
+    strips = editor.strips if hasattr(editor, 'strips') else editor.sequences
+    channel = max([s.channel for s in strips] + [0]) + 1
+    names = []
+    for i, sound in enumerate(sounds):
+        path = assets / sound['wav']
+        if not path.is_file():
+            warnings.append('%s: sound file missing' % label)
+            continue
+        frame = int(round(1 + sound['delay'] * fps))
+        while True:
+            strip = strips.new_sound(('%s %s' % (label, sound['name']))[:60], str(path), channel + i, frame)
+            names.append(strip.name)
+            length = strip.frame_final_duration
+            frame += length
+            if not sound.get('loop') or length <= 0 or frame > scene.frame_end:
+                break
+    return names
 
 
 def build(importer, context, place, collection):
@@ -714,6 +916,17 @@ def build(importer, context, place, collection):
     camera = context.scene.camera
     scene = context.scene
     fps = scene.render.fps / scene.render.fps_base
+    if any(e['particles'].get('wind_track') for e in effect['emitters']):
+        holder[WIND_PROPERTY] = DEFAULT_WIND
+        try:
+            holder.id_properties_ui(WIND_PROPERTY).update(
+                subtype='VELOCITY', description="The level's wind, which carries this effect's smoke and embers")
+        except (TypeError, AttributeError):
+            pass
+    if any(e.get('distortion') for e in effect['emitters']) and hasattr(scene, 'eevee') and \
+            hasattr(scene.eevee, 'use_raytracing') and not scene.eevee.use_raytracing:
+        scene.eevee.use_raytracing = True  # EEVEE refracts the scene behind heat haze only with ray tracing
+        importer.warnings.append('EEVEE ray tracing switched on for heat haze')
     for i, emitter in enumerate(effect['emitters']):
         name = emitter['name'].replace('em_', '', 1)
         try:
@@ -725,4 +938,10 @@ def build(importer, context, place, collection):
     end = int(math.ceil(1 + effect.get('duration', 1) * fps))
     if scene.frame_end < end:
         scene.frame_end = end
+    if effect.get('sounds'):
+        try:
+            holder['frostbite_sounds'] = sound_strips(scene, effect['sounds'], importer.assets,
+                                                      place.get('name', 'Effect'), fps, importer.warnings)
+        except (RuntimeError, AttributeError, TypeError) as error:
+            importer.warnings.append('%s sounds: %s' % (place.get('name', 'Effect'), error))
     return holder

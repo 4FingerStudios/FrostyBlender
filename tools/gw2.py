@@ -398,10 +398,12 @@ def data_roots(game):
 
 
 def bundles_with_patches(game, toc):
-    base_description = read_db(toc)
+    # A superbundle only the patch has (as GW1 Xbox 360 DLC levels): no base, its bundles read from the patch.
+    added = Path(toc).is_relative_to(Path(game) / 'Update/Patch/Data')
+    base_description = {} if added else read_db(toc)
     entries = {entry['id'].lower(): entry for entry in base_description.get('bundles', [])}
-    patch_toc = Path(game) / 'Update/Patch/Data' / toc.relative_to(Path(game) / 'Data')
-    patched = read_db(patch_toc) if patch_toc.exists() and patch_applies(game, toc) else None
+    patch_toc = toc if added else Path(game) / 'Update/Patch/Data' / toc.relative_to(Path(game) / 'Data')
+    patched = read_db(patch_toc) if patch_toc.exists() and (added or patch_applies(game, toc)) else None
     descriptions = patched.get('bundles', []) if patched else list(entries.values())
     def read_entry(path, entry):
         if entry['offset'] < 0 or not 0 < entry['size'] <= LIMIT:
@@ -819,7 +821,15 @@ def export(game, package, output, jobs=None, resource_data=None):
     data_root = (game / 'Data').resolve()
     toc = (data_root / (package + '.toc')).resolve()
     if not toc.is_relative_to(data_root) or not toc.is_file():
-        raise ValueError('Invalid GW2 map package')
+        # Linked Data folders (a GW1 Xbox 360 view, gw1_x360.py) and superbundles only the patch adds:
+        # check the name without following links, in the base and then the patch.
+        import os
+        for root in data_roots(game):
+            toc = Path(os.path.normpath(root / (package + '.toc')))
+            if toc.is_relative_to(Path(os.path.normpath(root))) and toc.is_file():
+                break
+        else:
+            raise ValueError('Invalid GW2 map package')
     output.mkdir(parents=True, exist_ok=True)
     for kind in ('ebx', 'resource', 'chunk'):
         (output / kind).mkdir(exist_ok=True)

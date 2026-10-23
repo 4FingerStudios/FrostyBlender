@@ -182,6 +182,8 @@ class Gw2Converter(Converter):
         self.terrain_tiles = 0
         self.grouped_instances = 0
         self.unplaced_group_instances = []
+        from map_rigs import MapRigs
+        self.map_rigs = MapRigs(self)  # skinned map objects: skeleton, skin and looping clip
         for asset, doc in archive.documents.values():
             if asset.get('root_type') != 'MeshVariationDatabase':
                 continue
@@ -619,22 +621,34 @@ class Gw2Converter(Converter):
                     # GW1 game-mode sub-levels each place the painted spawn-screen backdrops: boxes, not world geometry.
                     self.skipped['GW1 spawn-screen backdrop'] = self.skipped.get('GW1 spawn-screen backdrop', 0) + 1
                     return
-                try:
-                    path, materials = self.convert_static(mesh, variation)
-                except SkinnedMeshUnsupported:
-                    name = mesh[1].get('Name', mesh[0]['guid'])
-                    self.skipped_meshes[name] = self.skipped_meshes.get(name, 0) + 1
-                    self.skipped['SkinnedMesh'] = self.skipped.get('SkinnedMesh', 0) + 1
-                    return
+                rig_tags = None
+                skinned = mesh[1].get('$type') == 'SkinnedMeshAsset'
+                if not skinned:
+                    try:
+                        path, materials = self.convert_static(mesh, variation)
+                    except SkinnedMeshUnsupported:
+                        skinned = True
+                if skinned:
+                    # Animated geometry: placed in its bind pose on its own skeleton, with its clip if it has one.
+                    try:
+                        path, materials, rig_tags = self.map_rigs.convert(doc, obj, mesh, variation)
+                    except (ValueError, KeyError, IndexError, struct.error) as error:
+                        name = mesh[1].get('Name', mesh[0]['guid'])
+                        self.skipped_meshes[name] = self.skipped_meshes.get(name, 0) + 1
+                        self.skipped['SkinnedMesh'] = self.skipped.get('SkinnedMesh', 0) + 1
+                        self.errors.append({'stage': 'skinned', 'name': name, 'error': str(error)})
+                        return
                 world = transform @ matrix(obj['Transform'])
                 tags = {'mesh': path, 'source': mesh[1].get('Name', ''), 'source_level': source,
                         'level_instance': source, 'profile': 'gw2'}
                 tags.update({f'material_{i}': material for i, material in enumerate(materials)})
+                tags.update(rig_tags or {})
                 places.append({'kind': 'frostbite_mesh', 'name': mesh[1].get('Name', '').split('/')[-1],
                                'matrix': world.tolist(), 'tags': tags, 'values': {'collision': 0}})
                 # GW2 Havok is a different format. Generate a static triangle
                 # collider explicitly rather than claiming to decode native physics.
-                if not any(part in mesh[1].get('Name','').lower() for part in ('cloudsgeo','skydome','skybox','light_shadowmap')):
+                # Skinned objects move, so their bind pose makes no collider.
+                if rig_tags is None and not any(part in mesh[1].get('Name','').lower() for part in ('cloudsgeo','skydome','skybox','light_shadowmap')):
                     places.append({'kind': 'frostbite_collision', 'name': 'GW2 static surface collider',
                                    'matrix': world.tolist(), 'tags': {'mesh': path, 'level_instance': source,
                                                                    'profile': 'gw2', 'collision_source': 'render_mesh'},
@@ -705,6 +719,7 @@ class Gw2Converter(Converter):
                   'meshes': len(self.meshes), 'materials': len(self.materials), 'textures': len(self.texture_paths),
                   'counts': self.counts, 'errors': self.errors, 'skipped_entities': self.skipped,
                   'skipped_skinned_meshes': self.skipped_meshes,
+                  'skinned_objects': self.map_rigs.report(),
                   'terrain_tiles': self.terrain_tiles,
                   'grouped_instances': self.grouped_instances,
                   'unplaced_group_instances': self.unplaced_group_instances,
@@ -714,7 +729,7 @@ class Gw2Converter(Converter):
                                   'Collision is generated from render triangles, not native Havok physics.',
                                   'Terrain heightfields are translated; native terrain splat layers, holes and scatter vegetation are not yet translated.',
                                   'Water exports a bounded plane and native shader sidecars; Blender approximates the surface without game wave simulation.',
-                                  'Animated characters and original gameplay are not translated.']}
+                                  'Skinned map objects are rigged and loop their default clip; characters and original gameplay are not translated.']}
         return {'format': 'aura-frostbite-scene', 'version': 1, 'name': 'GW2_' + map_name, 'places': places}, report
 
 

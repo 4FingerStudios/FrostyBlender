@@ -15,8 +15,17 @@ Battle for Neighborville builds its particles as EmitterGraphs: node graphs comp
 simulate compute shader. Those shaders are run on the CPU (emitter_graph.py, dxbc.py) and every particle's
 position, size, spin, colour and transparency recorded over its life, so they play as the game computes them.
 
-Approximated: turbulence, alpha erosion, ribbons (flat strips) and beams (quads).
-Not ported: wind, collisions, heat distortion and sounds (listed in each effect's notes).
+Also simulated: turbulence (a smooth noise field with the processor's intensity, period, octaves, persistence
+and over-life curve; the game's own noise differs), world wind (each particle's drift per m/s of wind is
+recorded, and the add-on's Wind property sets the level's wind) and collisions with a ground plane at the
+effect's origin (bounce with the processor's restitution, come to rest, or die). Graphs that collide with the
+depth buffer are given that ground in their depth buffer. Heat-haze (distortion) emitters are kept and
+drawn as refraction; lights carry their intensity curve, flicker, loop and spot cone; sounds are exported as
+WAV (several layers of a patch mixed into one) for the add-on to put in the Sequencer.
+
+Approximated: alpha erosion, ribbons (flat strips), beams (quads), spline evaluators (straight between points).
+Not ported (listed in each effect's notes): collision and spawn sounds, screen flashes (visual environment),
+beam end points (location effects), camera shake, and wind inside Battle for Neighborville graphs.
 
     python effects.py discover --game GAME --out effects.json
     python effects.py export --game GAME --items items.json --out EXPORT [--names BFN_TYPES]
@@ -124,7 +133,9 @@ def discover(game):
 
 
 # ---------------- export ----------------
-BFN_FOLLOW = ('EffectBlueprint', 'EmitterGraph', 'ScalableEmitterDocument', 'GpuRuntimeEmitterDocument')
+BFN_FOLLOW = ('EffectBlueprint', 'EmitterGraph', 'ScalableEmitterDocument', 'GpuRuntimeEmitterDocument',
+              'SoundPatchConfigurationAsset')  # a sound configuration names the wave it plays
+WAVES = ('SoundWaveAsset', 'NewWaveAsset')
 
 
 def export(game, items, output, names=None):
@@ -141,6 +152,11 @@ def export(game, items, output, names=None):
             if a.get('name', '').lower() in wanted:
                 a['item'] = wanted[a['name'].lower()]['name']
         inventory['items'] = items
+        documents = {a['guid']: (a, json.loads((Path(output) / a['document']).read_text(encoding='utf-8')))
+                     for a in inventory['assets'] if a.get('document') and a.get('guid')}
+        archive = bfn.Archive(Path(game))
+        inventory['sounds'] = effect_sounds(lambda guid: documents.get(guid), _bfn_wave(archive), Path(output),
+                                            [d for a, d in documents.values() if a.get('root_type') == 'EffectBlueprint'])
         (Path(output) / 'inventory.json').write_text(json.dumps(inventory, indent=1), encoding='utf-8')
         return inventory
     game, output = Path(game), Path(output)
@@ -150,7 +166,7 @@ def export(game, items, output, names=None):
     by_name = {location[3]['name'].lower(): location for location in index['ebx'].values()}
     inventory = {'profile': kind, 'game': str(game), 'package': 'effects', 'assets': [], 'errors': [],
                  'archive_policy': 'base-only shared index'}
-    seen = set()
+    seen, names, effects = set(), {}, []
 
     def store(location):
         path, offset, size, source = location
@@ -161,6 +177,7 @@ def export(game, items, output, names=None):
         if document['guid'] in seen:
             return None
         seen.add(document['guid'])
+        names[document['guid']] = source['name']
         if document['root_type'] not in KEEP:
             return None  # sounds and gameplay data are not needed
         asset = dict(source)
@@ -188,6 +205,8 @@ def export(game, items, output, names=None):
         document = queue.pop()
         if document['root_type'] not in FOLLOW:
             continue
+        if document['root_type'] == 'EffectBlueprint':
+            effects.append(document)
         for ref in document['imports']:
             location = index['ebx'].get(ref['file'])
             if location is None or ref['file'] in seen:
@@ -195,6 +214,21 @@ def export(game, items, output, names=None):
             found = store(location)
             if found:
                 queue.append(found[1])
+    inventory['names'] = names  # shaders and sounds are read for their names only
+    loaded = {}
+
+    def load(guid):
+        if guid not in loaded:
+            location = index['ebx'].get(guid)
+            loaded[guid] = None
+            if location is not None:
+                path, offset, size, source = location
+                with path.open('rb') as stream:
+                    stream.seek(offset)
+                    content = gw2.decompress(gw2.Reader(stream.read(size)), source['original_size'])
+                loaded[guid] = ({'name': source['name']}, gw2.Ebx(content).document())
+        return loaded[guid]
+    inventory['sounds'] = effect_sounds(load, _gw_wave(game), output, effects)
     gw2.complete_dependencies(game, output, inventory)
     if kind == 'gw1':
         import gw1
@@ -259,6 +293,151 @@ def _atlas_chunks(game, kind, output, inventory, index):
         inventory['assets'].append({'kind': 'chunk', 'guid': guid, 'name': guid, 'path': rel, 'bytes': len(content),
                                     'original_size': len(content)})
         have.add(guid)
+
+
+# ---------------- sounds ----------------
+RATES = (8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000)
+
+
+def _sps_start(data, limit=4096):
+    """Offset of the first EA sound stream header in `data`, or None. Battle for Neighborville's wave chunks
+    put a small table of their own before it."""
+    import audio
+    for at in range(0, min(len(data), limit)):
+        if data[at] != 0x48:
+            continue
+        try:
+            info = audio.header(data, at)
+        except (ValueError, struct.error):
+            continue
+        if info['rate'] in RATES and info['codec'] in audio.CODECS and info['samples']:
+            return at
+    return None
+
+
+def _gw_wave(game):
+    """wave(name, root, folder) -> (WAV path, variation count) for a Garden Warfare SoundWaveAsset."""
+    import audio
+    chunks = []
+
+    def wave(name, root, folder):
+        if not chunks:
+            chunks.append(audio.Chunks(game))  # every chunk TOC of the install, read once
+        written = audio.export_sound(None, chunks[0], name, root, folder)
+        return written[0], len(written)
+    return wave
+
+
+def _bfn_wave(archive):
+    """wave(name, root, folder) for a Battle for Neighborville NewWaveAsset: its first stream, decoded by audio.py."""
+    import audio
+
+    def wave(name, root, folder):
+        listed = [c.get('ChunkId') for c in root.get('Chunks') or [] if c.get('ChunkId')]
+        if not listed:
+            raise ValueError('the wave has no sound data chunk')
+        ref = archive.chunk(listed[0])
+        if not ref:
+            raise ValueError('its sound data chunk is not in the archives')
+        data = archive.fetch(ref)
+        at = _sps_start(data)
+        if at is None:
+            raise ValueError('no EA sound stream in its chunk')
+        target = Path(folder) / (name.replace('\\', '/') + '.wav')
+        try:
+            rate, pcm = audio.decode_stream(data, at)
+            audio.write_wav(target, rate, pcm)
+        except NotImplementedError:
+            audio.via_vgmstream(data, at, target)  # codecs only vgmstream reads, when one is installed
+        return str(target), 1
+    return wave
+
+
+def _sound(load, wave, output, guid):
+    found = load(guid)
+    if not found:
+        raise ValueError('sound asset not exported')
+    asset, doc = found
+    root = doc['objects'][0]
+    info = {'name': asset['name'], 'loop': bool(root.get('IsLooping')), 'loudness': float(root.get('Loudness', 0) or 0)}
+    # A configuration (BFN) plays a shared patch; the patch says whether it loops.
+    patch = root.get('Sound') or {}
+    if patch.get('$pointer') == 2:
+        parent = load(doc['imports'][patch['index']]['file'])
+        if parent:
+            info['loop'] = info['loop'] or bool(parent[1]['objects'][0].get('IsLooping')) or 'loop' in parent[0]['name'].lower()
+    # A patch or configuration lists the waves it plays as referenced data.
+    waves = [found] if doc['root_type'] in WAVES else []
+    for reference in root.get('ReferencedData') or []:
+        data = reference.get('SoundData') or {}
+        if data.get('$pointer') == 2:
+            w = load(doc['imports'][data['index']]['file'])
+            if w and w[1]['root_type'] in WAVES:
+                waves.append(w)
+    if not waves:
+        raise ValueError('no sound wave in %s' % asset['name'].split('/')[-1])
+    # A patch plays its waves together (an explosion's body, low end and debris): they are mixed into one.
+    written, count, failed = [], 0, None
+    for w in waves[:MAX_LAYERS]:
+        try:
+            path, variations = wave(w[0]['name'], w[1]['objects'][0], Path(output) / 'sounds')
+        except Exception as error:  # a layer that does not decode leaves the others
+            failed = failed or error
+            continue
+        written.append(path)
+        count = max(count, variations)
+    if not written:
+        raise failed
+    path = written[0] if len(written) == 1 else _mix(written, Path(output) / 'sounds' / (asset['name'] + '.mix.wav'))
+    info.update(wav=Path(path).relative_to(output).as_posix(), variations=count, waves=len(waves))
+    return info
+
+
+MAX_LAYERS = 8
+
+
+def _mix(paths, target):
+    """The WAV files at `paths` played together, at the highest of their rates, as one WAV (peak kept below 1)."""
+    import wave as wavefile
+    import audio
+    layers = []
+    for path in paths:
+        with wavefile.open(str(path), 'rb') as f:
+            pcm = np.frombuffer(f.readframes(f.getnframes()), '<i2').reshape(-1, f.getnchannels()).astype(np.float64)
+            layers.append((f.getframerate(), pcm))
+    rate = max(r for r, _ in layers)
+    channels = max(p.shape[1] for _, p in layers)
+    length = max(int(len(p) * rate / r) for r, p in layers)
+    out = np.zeros((length, channels))
+    for r, pcm in layers:
+        n = int(len(pcm) * rate / r)
+        at = np.arange(n) * r / rate
+        for c in range(channels):
+            out[:n, c] += np.interp(at, np.arange(len(pcm)), pcm[:, min(c, pcm.shape[1] - 1)])
+    peak = np.abs(out).max(initial=0)
+    if peak > 32000:
+        out *= 32000 / peak
+    audio.write_wav(Path(target), rate, out.astype(np.int16))
+    return str(target)
+
+
+def effect_sounds(load, wave, output, effects):
+    """{sound file GUID: {'name', 'wav' (relative to `output`), 'loop', 'loudness', ...} or {'error'}} for every
+    SoundEffectEntityData of the effect documents. load(guid) -> (asset, document) or None."""
+    out = {}
+    for doc in effects:
+        for o in doc['objects']:
+            ref = (o.get('Sound') or {}) if o.get('$type') == 'SoundEffectEntityData' else {}
+            if ref.get('$pointer') != 2:
+                continue
+            guid = doc['imports'][ref['index']]['file']
+            if guid in out:
+                continue
+            try:
+                out[guid] = _sound(load, wave, output, guid)
+            except Exception as error:  # one sound must not stop the export
+                out[guid] = {'error': str(error)}
+    return out
 
 
 def _bc_colors(blocks):
@@ -427,6 +606,20 @@ class Emitter:
             u /= np.maximum(np.linalg.norm(u, axis=1, keepdims=True), 1e-9)
             w = np.cross(axis, u)
             return axis * cos_t[:, None] + (u * np.cos(phi)[:, None] + w * np.sin(phi)[:, None]) * sin_t[:, None]
+        if kind == 'PolynomialOperatorData':
+            # Two clamped cubics combined (a ramp up times a ramp down makes a swell), then clamped.
+            a, b = (np.clip(_poly(p.get('Coefficients'), t) * float(p.get('ScaleValue', 1.0)),
+                            float(p.get('MinClamp', -1e9)), float(p.get('MaxClamp', 1e9)))
+                    for p in (o.get('FirstOperand') or {}, o.get('SecondOperand') or {}))
+            op = {0: np.multiply, 1: np.add, 2: np.subtract, 3: np.minimum, 4: np.maximum}.get(o.get('Operation', 0), np.multiply)
+            return np.clip(op(a, b), float(o.get('MinClampResult', -1e9)), float(o.get('MaxClampResult', 1e9)))
+        if kind == 'SplineData':
+            # Up to 12 points: X in XValues0..2 (rising, then zero padding), Y in YValues0..2; straight between them.
+            curve = o.get('SplineCurve') or {}
+            xs = [v for k in ('XValues0', 'XValues1', 'XValues2') for v in _vec(curve.get(k), 'xyzw')]
+            ys = [v for k in ('YValues0', 'YValues1', 'YValues2') for v in _vec(curve.get(k), 'xyzw')]
+            count = next((i for i in range(1, len(xs)) if xs[i] <= xs[i - 1]), len(xs))
+            return np.interp(t, xs[:count], ys[:count])
         if o.get('Pre'):
             self.note('%s approximated by its input' % kind)
             return self.evaluate(o.get('Pre'), t)
@@ -540,9 +733,52 @@ def life_curve(e, processor, n, emitter_t):
     return lambda f: fixed
 
 
-def simulate(e, position, velocity, life, emitter_t, notes):
+def _lattice(cells, seed):
+    """A repeatable pseudo-random value in -1..1 at each integer lattice point (cells: (..., 3) int64)."""
+    h = (cells[..., 0] * 73856093) ^ (cells[..., 1] * 19349663) ^ (cells[..., 2] * 83492791) ^ (seed * 2654435761)
+    h = (h ^ (h >> 13)) * 1274126177
+    return ((h ^ (h >> 16)) & 0xFFFF).astype(np.float64) / 32767.5 - 1.0
+
+
+def _noise(q, seed):
+    """Smooth value noise (trilinear between lattice values, smoothstepped) at points q (n, 3)."""
+    base = np.floor(q)
+    f = q - base
+    f = f * f * (3 - 2 * f)
+    base = base.astype(np.int64)
+    out = np.zeros(len(q))
+    for corner in range(8):
+        offset = np.array([corner & 1, corner >> 1 & 1, corner >> 2 & 1])
+        weight = np.prod(np.where(offset, f, 1 - f), axis=1)
+        out += weight * _lattice(base + offset, seed)
+    return out
+
+
+def turbulence_force(q, octaves, persistence):
+    """A smooth 3D force field (one noise per axis) summed over octaves, about -1..1 per axis."""
+    total, amplitude, scale, norm = np.zeros((len(q), 3)), 1.0, 1.0, 0.0
+    for octave in range(max(int(octaves), 1)):
+        for axis in range(3):
+            total[:, axis] += amplitude * _noise(q * scale, 17 * axis + 101 * octave + 1)
+        norm += amplitude
+        amplitude *= persistence
+        scale *= 2.0
+    return total / max(norm, 1e-6) * 1.6  # value noise rarely reaches 1; bring it back to about -1..1
+
+
+def _randomness(e, processor, n):
+    return 1 - float(processor.get('PerParticleRandomness', 0) or 0) * e.rng.random(n) if processor else np.ones(n)
+
+
+GROUND = 0.0  # height of the ground plane in the effect's own space (the effect sits on the ground)
+
+
+def simulate(e, position, velocity, life, emitter_t, notes, transform=None, size=None, extras=None):
     """Euler-integrate every particle over its own life (as the game and the VFX Editor do), recording KEYS
-    points of its path and its spin angle, so forces with over-life curves come out right."""
+    points of its path and its spin angle, so forces with over-life curves come out right.
+    With `extras` (a dict), what the add-on needs beyond the path is put there: 'wind' (how far one m/s of
+    world wind has carried each particle by each key) and 'end' (the part of its life after which a
+    collision has killed it; its path past that is not drawn)."""
     n = len(life)
     g = e.find('GravityData')
     gravity = np.array([0.0, -float(g.get('Gravity', 0)), 0.0]) if g else np.zeros(3)
@@ -564,39 +800,106 @@ def simulate(e, position, velocity, life, emitter_t, notes):
     r_curve = life_curve(e, r, n, emitter_t)
     if spin_p and r is None:
         spin = np.zeros(n)
+    # Turbulence: a smooth noise force field (its octaves and persistence), as a force or, for the part
+    # TurbulenceForceAsInstantVelocity says, as a velocity added for that step only.
     t = e.find('TurbulanceData')
     turbulence = float(t.get('Intensity', 0) or 0) * _vec(t.get('Multiplier'), default=1) if t else np.zeros(3)
     period = max(float(t.get('PeriodSpace', 1) or 1), 1e-3) if t else 1.0
-    phase = e.rng.random((n, 3)) * 100
-    if t:
-        notes.append('turbulence approximated')
-    for kind in ('WorldWindData', 'UpdateCollisionData'):
-        if e.find(kind):
-            notes.append(kind.replace('Data', '').replace('Update', '') + ' not simulated')
+    octaves = int(t.get('Octaves', 1) or 1) if t else 1
+    persistence = float(t.get('OctavePersistence', 0.5) or 0.5) if t else 0.5
+    instant = min(max(float(t.get('TurbulenceForceAsInstantVelocity', 0) or 0), 0.0), 1.0) if t else 0.0
+    t_scale, t_curve = _randomness(e, t, n), life_curve(e, t, n, emitter_t)
+    phase = e.rng.random(3) * 100  # one field per emitter, so neighbouring particles swirl together
+    # World wind: the particles drift with WindMultiplier of the wind's speed. The wind's direction and speed
+    # belong to the level, so each particle's drift per m/s of wind is recorded and the add-on scales it.
+    w = e.find('WorldWindData')
+    wind = float(w.get('WindMultiplier', 0) or 0) if w else 0.0
+    w_scale, w_curve = _randomness(e, w, n), life_curve(e, w, n, emitter_t)
+    # Collisions with the ground plane: bounce (Restitution), come to rest under RestSpeedThreshold, or die.
+    c = e.find('UpdateCollisionData')
+    collide = c is not None or (e.template.get('$gpu_collision') or 0) > 0
+    if c is not None:
+        restitution = float(c.get('Restitution', 0.5) or 0)
+        rest_speed = float(c.get('RestSpeedThreshold', 0) or 0)
+        scatter = float(c.get('Randomness', 0) or 0)
+        radius_factor = float(c.get('CollisionRadiusFactor', 1) or 0)
+        kill = bool(c.get('KillOnCollision'))
+        if c.get('Sound') and c['Sound'].get('$pointer'):
+            notes.append('collision sounds not played')
+    else:  # GPU emitters collide with the depth buffer: CollisionThickness deep, losing CollisionDampening
+        restitution = 1 - min(max(float(e.template.get('$gpu_damping', 0) or 0), 0.0), 1.0)
+        rest_speed, scatter, radius_factor, kill = 0.05, 0.0, 0.0, False
     if moves is None:  # nothing moves the particles
         velocity = np.zeros_like(velocity)
-        gravity, local, turbulence = np.zeros(3), np.zeros(3), np.zeros(3)
+        gravity, local, turbulence, wind = np.zeros(3), np.zeros(3), np.zeros(3), 0.0
 
     p, v = position.astype(float).copy(), velocity.astype(float).copy()
+    if collide:
+        # The ground in emitter space: height = up . p + offset, from the emitter's place in the effect.
+        m = np.asarray(transform if transform is not None else np.eye(4), float)
+        scale = max(np.linalg.norm(m[1, :3]), 1e-9)
+        up, offset = m[1, :3] / scale, m[1, 3] / scale
+        floor = min(GROUND, float((p @ up).min(initial=0.0) + offset)) - offset  # never below a spawn point
+        radius = (np.asarray(size, float) if size is not None else np.ones(n)) * 0.5 * radius_factor
+        resting = np.zeros(n, bool)
+        end = np.ones(n)
+        hits = 0
     dt = (life / STEPS)[:, None]
-    track, angles = [p.copy()], [angle.copy()]
-    every = STEPS // (KEYS - 1)
+    path, spins, drift = [p.copy()], [angle.copy()], [np.zeros(n)]
+    carried = np.zeros(n)
     for s in range(STEPS):
         f = s / STEPS
         acc = gravity * (g_scale * g_curve(f))[:, None] + local * (l_scale * l_curve(f))[:, None]
+        kick = 0.0
         if turbulence.any():
-            q = p / period + phase
-            acc = acc + turbulence * np.stack([np.sin(q[:, 1] * 1.7 + q[:, 2]), np.sin(q[:, 2] * 1.3 + q[:, 0]),
-                                               np.sin(q[:, 0] * 1.1 + q[:, 1])], 1)
+            force = turbulence * turbulence_force(p / period + phase, octaves, persistence) * (t_scale * t_curve(f))[:, None]
+            acc = acc + force * (1 - instant)
+            kick = force * instant
         v = v + acc * dt
         if drag:
             v = v * np.exp(-drag * np.maximum(d_curve(f), 0)[:, None] * dt)
-        p = p + v * v_curve(f)[:, None] * dt
-        angle = angle + spin * r_curve(f) * dt[:, 0]
-        if (s + 1) % every == 0:
-            track.append(p.copy())
-            angles.append(angle.copy())
-    return np.stack(track, 1), np.stack(angles, 1)
+        step = (v + kick) * v_curve(f)[:, None] * dt
+        if collide:
+            step[resting] = 0.0
+            v[resting] = 0.0
+        p = p + step
+        if wind:
+            carried = carried + wind * w_scale * w_curve(f) * dt[:, 0]
+        if collide:
+            height = p @ up - floor - radius
+            hit = (height < 0) & ~resting & (end >= 1)
+            if hit.any():
+                hits += int(hit.sum())
+                if kill:
+                    end[hit] = (s + 1) / STEPS
+                else:
+                    p[hit] -= up * height[hit, None]
+                    vn = v[hit] @ up
+                    bounce = v[hit] - up * ((1 + restitution) * np.minimum(vn, 0))[:, None]
+                    if scatter:
+                        bounce += _unit(int(hit.sum()), e.rng) * np.linalg.norm(bounce, axis=1, keepdims=True) * scatter
+                        bounce -= up * np.minimum(bounce @ up, 0)[:, None]  # still away from the ground
+                    normal = up * (bounce @ up)[:, None]
+                    bounce = normal + (bounce - normal) * restitution ** 0.5  # some grip along the ground
+                    v[hit] = bounce
+                    settle = max(rest_speed, math.sqrt(2 * float(np.linalg.norm(gravity)) * 0.005))
+                    resting[np.flatnonzero(hit)[np.linalg.norm(bounce, axis=1) < settle]] = True
+        angle = angle + spin * r_curve(f) * dt[:, 0] * (~resting if collide else 1)
+        path.append(p.copy())
+        spins.append(angle.copy())
+        drift.append(carried.copy())
+    path, spins, drift = np.stack(path, 1), np.stack(spins, 1), np.stack(drift, 1)
+    every = STEPS // (KEYS - 1)
+    track, angles, drift = path[:, ::every], spins[:, ::every], drift[:, ::every]
+    if extras is not None:
+        if wind:
+            extras['wind'] = drift
+            notes.append('world wind x%g (set the wind on the effect)' % wind)
+        if collide:
+            extras['end'] = end
+            notes.append('%s the ground: %d hits' % ('dies on' if kill else 'bounces off', hits) if hits else
+                         'collides with the ground (no particle reached it)')
+    return track, angles
 
 
 def _direction(e, position, n, up):
@@ -614,7 +917,9 @@ def _direction(e, position, n, up):
     return d
 
 
-def emitter_data(archive, converter, doc, template, name, transform, delay, seed, processors=None, gpu=False):
+def emitter_data(archive, converter, doc, template, name, transform, delay, seed, processors=None, gpu=False,
+                 distortion=None):
+    """One emitter as effect JSON. `distortion` (a strength) draws it as heat haze that bends what is behind it."""
     notes = []
     e = Emitter(archive, doc, template, seed, notes, processors)
     loop = _loops(template)
@@ -642,7 +947,9 @@ def emitter_data(archive, converter, doc, template, name, transform, delay, seed
         tint = np.ones((n, 3))
     flip = np.stack([e.rng.random(n) < float(template.get('FlipUProbability', 0) or 0),
                      e.rng.random(n) < float(template.get('FlipVProbability', 0) or 0)], 1).astype(float)
-    track, angles = simulate(e, position, direction * speed[:, None], life, emitter_t, notes)
+    extras = {}
+    track, angles = simulate(e, position, direction * speed[:, None], life, emitter_t, notes,
+                             transform_matrix(transform), size, extras)
 
     color = e.curve('UpdateColorData')
     base_color = _vec((e.find('UpdateColorData') or {}).get('Color'), default=1)
@@ -684,7 +991,7 @@ def emitter_data(archive, converter, doc, template, name, transform, delay, seed
         alpha = [min(max(a, lo), hi) for a in alpha]
 
     alive = keep
-    return {
+    out = {
         'name': name, 'kind': kind, 'transform': transform_matrix(transform), 'delay': delay, 'loop': loop,
         'duration': duration, 'alignment': template.get('EmittableAlignment', 0), 'align': align,
         'stretch': stretch, 'stretch_clamp': float(template.get('MotionStretchLengthClamp', 100) or 100),
@@ -704,6 +1011,13 @@ def emitter_data(archive, converter, doc, template, name, transform, delay, seed
             'flip': flip[alive].tolist(), 'track': track[alive].round(4).tolist(), 'angle': angles[alive].round(4).tolist()},
         'notes': notes,
     }
+    if 'wind' in extras:  # metres one m/s of world wind has carried each particle, per path point
+        out['particles']['wind_track'] = extras['wind'][alive].round(4).tolist()
+    if 'end' in extras and (extras['end'][alive] < 1).any():  # killed by a collision this far into its life
+        out['particles']['end'] = extras['end'][alive].round(4).tolist()
+    if distortion:
+        out['distortion'] = distortion
+    return out
 
 
 def _gpu_processors(doc, template):
@@ -760,6 +1074,8 @@ def gpu_template(template):
     t['MaxCount'] = int(template.get('MaxParticleCount', 0) or 0)
     t['EmittableType'] = 100
     t['EmittableAlignment'] = 0
+    t['$gpu_collision'] = float(template.get('CollisionThickness', 0) or 0)  # collides with the depth buffer
+    t['$gpu_damping'] = float(template.get('CollisionDampening', 0) or 0)
     return t
 
 
@@ -807,8 +1123,9 @@ TEXTURE_SKIP = ('normal', 'noise', 'distort', 'flow', 'gradient', 'erosion', 'ma
 EMISSIVE_HINTS = ('emissive', 'additive', 'blackbody', 'glow', 'fire', 'spark', 'ember', 'flash', 'electric', 'lightning')
 
 
-def _graph_texture(archive, converter, gdoc, graph):
-    """The graph's sprite: its first colour texture, and the flipbook it is cut into."""
+def _graph_texture(archive, converter, gdoc, graph, haze=False):
+    """The graph's sprite: its first colour texture (its distortion or normal texture for heat haze), and the
+    flipbook it is cut into."""
     shader = graph.get('Shader') or {}
     picked = None
     for param in shader.get('TextureParameters', []) or []:
@@ -817,6 +1134,8 @@ def _graph_texture(archive, converter, gdoc, graph):
             continue
         label = ('%s %s' % (param.get('ParameterName', ''), found[1].get('Name', ''))).lower()
         skip = any(k in label for k in TEXTURE_SKIP)
+        if haze:
+            skip = not any(k in label for k in ('distort', 'normal', '_n_', 'refract'))
         if picked is None or (picked[1] and not skip):
             picked = (found, skip)
     columns, rows = 1, 1
@@ -866,7 +1185,18 @@ def graph_emitter(archive, converter, doc, entity, index, name):
     loop = sim.emitter_life <= 0 and not sim.burst
     window = sim.emitter_life if sim.emitter_life > 0 else (LOOP_SECONDS if loop else 0.1)
     seed = int(hashlib.sha1(('%s|%d' % (name, index)).encode()).hexdigest()[:6], 16) / float(1 << 24) * 100.0
-    out = sim.run(window, loop, seed, max_particles=MAX_PARTICLES, keys=KEYS)
+    # The ground in the graph's space (its entity places it in the effect), never above the emitter itself.
+    m = np.asarray(transform_matrix(entity.get('Transform')), float)
+    scale = max(np.linalg.norm(m[1, :3]), 1e-9)
+    ground = (m[1, :3] / scale, (min(GROUND, m[1, 3]) - m[1, 3]) / scale)
+    out = sim.run(window, loop, seed, max_particles=MAX_PARTICLES, keys=KEYS, ground=ground)
+    born = out.get('Position')
+    if sim.collides() and born is not None and len(born):
+        low = float((born[:, 0, :3] @ ground[0]).min())
+        if low < ground[1] - 0.01:  # some spawn below the ground: lower it to them, as for CPU emitters
+            sim = emitter_graph.Graph(graph, entity, textures)
+            ground = (ground[0], low - 0.01)
+            out = sim.run(window, loop, seed, max_particles=MAX_PARTICLES, keys=KEYS, ground=ground)
     n = len(out['spawn'])
     delay = float(entity.get('StartDelay', 0) or 0)
 
@@ -925,7 +1255,8 @@ def graph_emitter(archive, converter, doc, entity, index, name):
     tracks['color_track'] = color / np.maximum(peak, 1.0)[..., None]
     tracks['glow_track'] = np.where(peak > 1.0, 0.8 * np.sqrt(peak), 1.0)
     tracks['alpha_track'] = alpha
-    texture, columns, rows = _graph_texture(archive, converter, gdoc, graph)
+    haze = distortion_strength(name, shader_name)
+    texture, columns, rows = _graph_texture(archive, converter, gdoc, graph, bool(haze))
     frames = columns * rows
     anim = field('Animation', 1, 0.0)
     if anim is not None and frames > 1:
@@ -948,7 +1279,7 @@ def graph_emitter(archive, converter, doc, entity, index, name):
         'materials': mesh[1] if mesh else [], 'frames': frames, 'columns': columns, 'anim_speed': 0.0, 'anim_on_life': False,
         'curves': {'size': None, 'size_x': None, 'size_y': None, 'alpha': None, 'color': [[1.0, 1.0, 1.0]] * SAMPLES},
         'particles': particles, 'notes': notes + sim.notes,
-    }
+    } | ({'distortion': haze} if haze else {})
 
 
 def transform_matrix(transform):
@@ -956,16 +1287,102 @@ def transform_matrix(transform):
     return matrix(transform or {}).tolist()
 
 
+LIGHTS = ('LightEffectEntityData', 'PbrSphereLightEntityData', 'PointLightEntityData', 'SpotLightEntityData',
+          'PbrSpotLightEntityData', 'PbrRectangularLightEntityData')
+PHYSICAL_LIGHT = 1e4  # brighter than this, a light's intensity is in physical units (Battle for Neighborville)
+
+
+def _kelvin(temperature):
+    """Approximate RGB (0..1) of a black body at `temperature` kelvin (Tanner Helland's fit)."""
+    t = max(float(temperature), 1000.0) / 100.0
+    r = 1.0 if t <= 66 else min(max(1.292936186 * (t - 60) ** -0.1332047592, 0), 1)
+    g = (0.39008157876 * math.log(t) - 0.63184144378) if t <= 66 else 1.129890861 * (t - 60) ** -0.0755148492
+    b = 1.0 if t >= 66 else (0.0 if t <= 19 else 0.54320678911 * math.log(t - 10) - 1.19625408914)
+    return [r, min(max(g, 0), 1), min(max(b, 0), 1)]
+
+
 def light_data(archive, doc, entity):
-    light = archive.resolve(doc, entity.get('Light'))
-    light = light[1] if light else entity
+    """A light of an effect: where it is, its colour and reach, and its intensity over its life. A
+    LightEffectEntityData wraps the light it shows with a lifetime, an intensity curve (clamped to
+    IntensityMin..Max), a random flicker (RandomIntensityMin..Max) and looping."""
+    found = archive.resolve(doc, entity.get('Light'))
+    light = found[1] if found else entity
     color = _vec(light.get('Color'), default=1)
+    if light.get('LightColorMode') == 1 and light.get('Temperature'):
+        color = np.asarray(_kelvin(light['Temperature'])) * max(float(color.max()), 1.0)
+    transform = np.asarray(transform_matrix(entity.get('Transform')), float)
+    if light is not entity and light.get('Transform'):
+        transform = transform @ np.asarray(transform_matrix(light.get('Transform')), float)
     curve = entity.get('IntensityCurve')
-    return {'transform': transform_matrix(entity.get('Transform')), 'color': color.tolist(),
-            'intensity': float(light.get('Intensity', 1)), 'radius': float(light.get('Radius', light.get('AttenuationRadius', 5)) or 5),
-            'lifetime': float(entity.get('Lifetime', 0) or 0), 'delay': float(entity.get('StartDelay', 0) or 0),
-            'looping': bool(entity.get('Looping')),
-            'curve': [float(v) for v in np.clip(_poly(curve, np.linspace(0, 1, SAMPLES)), 0, 1e3)] if curve else None}
+    lo, hi = float(entity.get('IntensityMin', 0) or 0), float(entity.get('IntensityMax', 0) or 0)
+    values = None
+    if curve:
+        values = _poly(curve, np.linspace(0, 1, SAMPLES))
+        values = np.clip(values, lo, hi) if hi > lo else np.clip(values, 0, 1e3)
+    kind = light.get('$type', '')
+    intensity = float(light.get('Intensity', 1) or 0)
+    out = {'type': kind, 'transform': transform.tolist(), 'color': color.tolist(),
+           'intensity': intensity * float(light.get('Dimmer', 1) or 1),
+           'radius': float(light.get('Radius', light.get('AttenuationRadius', 5)) or 5),
+           'size': float(light.get('SphereRadius', light.get('Width', 0)) or 0),
+           'lifetime': float(entity.get('Lifetime', 0) or 0), 'delay': float(entity.get('StartDelay', 0) or 0),
+           'looping': bool(entity.get('Looping')),
+           'curve': [float(v) for v in values] if values is not None else None,
+           'physical': intensity >= PHYSICAL_LIGHT}
+    flicker = float(entity.get('RandomIntensityMin', 1) or 0), float(entity.get('RandomIntensityMax', 1) or 0)
+    if 'RandomIntensityMin' in entity and abs(flicker[1] - flicker[0]) > 1e-3:
+        out['flicker'] = [min(flicker), max(flicker)]
+    if 'Spot' in kind or 'Rectangular' in kind:
+        outer = float(light.get('OuterAngle', light.get('ConeOuterAngle', 40)) or 40)
+        inner = float(light.get('InnerAngle', light.get('ConeInnerAngle', 0)) or 0)
+        out['spot'] = {'outer': outer, 'inner': min(inner, outer)}
+    return out
+
+
+def _shader_name(archive, doc, template):
+    """The surface shader an emitter template draws with (its path), or ''."""
+    ref = (template.get('Shader') or {}).get('Shader') or {}
+    found = archive.resolve(doc, ref) if ref else None
+    if found:
+        return (found[0].get('name') or found[1].get('Name') or '').lower()
+    if ref.get('$pointer') == 2:
+        return NAMES.get(doc['imports'][ref['index']]['file'], '').lower()
+    return ''
+
+
+# Effect parts with no Blender counterpart yet, and what they do in the game.
+UNPORTED = {'VisualEnvironmentEffectEntityData': 'screen flash (visual environment change) not ported',
+            'LocationEffectEntityData': 'beam end point (location effect) not ported',
+            'DecalEffectEntityData': 'decal not ported', 'CameraShakeEffectEntityData': 'camera shake not ported',
+            'ForceFeedbackEffectEntityData': 'controller rumble not ported'}
+DISTORTION = ('distortion', 'refraction', 'heathaze', 'heat_haze', '_distort')
+
+
+def distortion_strength(*names):
+    """How strongly an emitter bends what is behind it, from its own or its shader's name (0: it does not)."""
+    text = ' '.join(n.lower() for n in names if n)
+    if not any(k in text for k in DISTORTION) and not re.search(r'_heat(burst)?(_|$)', text):
+        return 0.0
+    return 1.5 if 'shockwave' in text or 'radial' in text else 1.0
+
+
+NAMES = {}   # file GUID -> name, for the files an export read but did not keep (shaders, sounds)
+SOUNDS = {}  # sound file GUID -> exported WAV and how it plays (filled by convert)
+
+
+def sound_data(doc, entity):
+    """A SoundEffectEntityData as {'wav', 'name', 'transform', 'delay', 'loop', 'loudness'}, or a note (str)."""
+    ref = entity.get('Sound') or {}
+    if ref.get('$pointer') != 2:
+        return 'sound has no asset'
+    found = SOUNDS.get(doc['imports'][ref['index']]['file'])
+    if not found:
+        return 'sound not exported'
+    if 'wav' not in found:
+        return 'sound %s' % found.get('error', 'not decoded')
+    return {'wav': found['wav'], 'name': found['name'].split('/')[-1], 'transform': transform_matrix(entity.get('Transform')),
+            'delay': float(entity.get('StartDelay', 0) or 0), 'loop': bool(found.get('loop')),
+            'loudness': float(found.get('loudness') or 0)}
 
 
 def effect_data(archive, converter, doc, name, seen=None):
@@ -973,7 +1390,7 @@ def effect_data(archive, converter, doc, name, seen=None):
     root = archive.resolve(doc, doc['objects'][0].get('Object'))
     # version 2: particles carry their recorded paths ('track', 'angle'); version 1 files held start
     # position and velocity, and the add-on still plays those.
-    out = {'name': name, 'version': 2, 'emitters': [], 'lights': [], 'notes': []}
+    out = {'name': name, 'version': 2, 'emitters': [], 'lights': [], 'sounds': [], 'notes': []}
     if not root:
         out['notes'].append('no effect entity')
         return out
@@ -1003,19 +1420,18 @@ def effect_data(archive, converter, doc, name, seen=None):
                 if note not in out['notes']:
                     out['notes'].append(note)
                 continue
-            if 'distortion' in ename.lower() or 'refraction' in ename.lower():
-                out['notes'].append('%s: heat distortion not ported' % ename.split('/')[-1])
-                continue
+            haze = distortion_strength(ename, _shader_name(archive, edoc, template[1]))
             seed = int(hashlib.sha1(('%s|%d' % (ename, i)).encode()).hexdigest()[:8], 16)
             try:
                 if gpu:
                     data = emitter_data(archive, converter, edoc, gpu_template(template[1]), ename.split('/')[-1],
                                         entity.get('Transform'), float(entity.get('StartDelay', 0) or 0), seed,
-                                        _gpu_processors(edoc, template[1]), gpu=True)
+                                        _gpu_processors(edoc, template[1]), gpu=True, distortion=haze)
                     data['emissive'] = data['emissive'] or float(template[1].get('EmissiveExposureFactor', 0) or 0) > 0
                 else:
                     data = emitter_data(archive, converter, edoc, template[1], ename.split('/')[-1],
-                                        entity.get('Transform'), float(entity.get('StartDelay', 0) or 0), seed)
+                                        entity.get('Transform'), float(entity.get('StartDelay', 0) or 0), seed,
+                                        distortion=haze)
                 out['emitters'].append(data)
             except Exception as error:  # one emitter must not lose the effect
                 out['notes'].append('%s: %s' % (ename.split('/')[-1], error))
@@ -1026,13 +1442,18 @@ def effect_data(archive, converter, doc, name, seen=None):
                 out['emitters'].append(graph_emitter(archive, converter, doc, entity, i, gname.split('/')[-1]))
             except Exception as error:  # one emitter must not lose the effect
                 out['notes'].append('%s: %s' % (gname.split('/')[-1], error))
-        elif kind in ('LightEffectEntityData', 'PbrSphereLightEntityData', 'PointLightEntityData', 'SpotLightEntityData',
-                      'PbrSpotLightEntityData', 'PbrRectangularLightEntityData'):
+        elif kind in LIGHTS:
             out['lights'].append(light_data(archive, doc, entity))
         elif kind == 'SoundEffectEntityData':
-            out['notes'].append('sound not ported')
+            sound = sound_data(doc, entity)
+            if isinstance(sound, dict):
+                out['sounds'].append(sound)
+            elif sound not in out['notes']:
+                out['notes'].append(sound)
         else:
-            out['notes'].append('%s not ported' % kind)
+            note = UNPORTED.get(kind, '%s not ported' % kind)
+            if note not in out['notes']:
+                out['notes'].append(note)
     out['duration'] = max([e['delay'] + e['duration'] + (max(e['particles']['life']) if e['particles']['life'] else 0)
                            for e in out['emitters']] + [l['delay'] + l['lifetime'] for l in out['lights']] + [0.5])
     out['loop'] = any(e['loop'] for e in out['emitters'])
@@ -1063,6 +1484,18 @@ def convert(export_dir, textures, assets, out, gap=1.0):
         import gw2_convert
         archive = gw2_convert.Gw2Archive(export_dir)
         converter = gw2_convert.Gw2Converter(archive, textures, assets)
+    NAMES.update(inventory.get('names') or {})
+    SOUNDS.clear()
+    for guid, sound in (inventory.get('sounds') or {}).items():
+        if sound.get('wav') and (export_dir / sound['wav']).is_file():
+            data = (export_dir / sound['wav']).read_bytes()
+            rel = 'sounds/frostbite/%s.wav' % hashlib.sha1(data).hexdigest()[:16]
+            (assets / rel).parent.mkdir(parents=True, exist_ok=True)
+            (assets / rel).write_bytes(data)
+            sound = dict(sound, wav=rel)
+        else:
+            sound = {k: v for k, v in sound.items() if k != 'wav'}
+        SOUNDS[guid] = sound
     wanted = {i['asset'].lower(): i for i in inventory.get('items', [])}
     places, errors = [], []
     x = 0.0

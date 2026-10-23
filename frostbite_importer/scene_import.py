@@ -64,6 +64,9 @@ class Importer:
         self.rig = rig
         self.meshes, self.materials, self.images, self.collections = {}, {}, {}, {}
         self.armatures = {}
+        # Skinned map objects: armature data per skeleton, shared clip Actions, and how many were rigged/animated.
+        self.rig_data, self.clip_actions = {}, {}
+        self.rigged = self.animated = self.clip_length = 0
         self.warnings = []
         try:  # the optional game shaders (Garden Warfare 1 and 2 materials)
             self.game_shaders = bool(bpy.context.scene.frostbite.game_shaders)
@@ -255,7 +258,75 @@ class Importer:
     def bind(self, context, ob, tags, collection):
         """Parent a skinned mesh object to its armature and weight it."""
         rig, names = self.armature(context, tags['skeleton'], collection)
-        bones, weights = amsh.read_skin(self.assets / tags['skin'], len(ob.data.vertices))
+        self.weight(ob, rig, names, tags['skin'])
+
+    def place_rig(self, context, ob, tags, collection):
+        """A skinned map object (flag, windmill, machine): its own armature object at the object's map transform,
+        sharing one armature datablock per skeleton (poses are per object), and its looping clip if it has one."""
+        rel = tags['skeleton']
+        if rel not in self.rig_data:
+            doc = json.loads((self.assets / rel).read_text(encoding='utf-8'))
+            arm = bpy.data.armatures.new(Path(rel).stem[:60])
+            arm.display_type = 'STICK'
+            builder = bpy.data.objects.new(arm.name, arm)
+            collection.objects.link(builder)
+            try:
+                names = self.build_bones(context, builder, doc['bones'])
+            finally:
+                bpy.data.objects.remove(builder)
+            self.rig_data[rel] = (arm, names, doc.get('name', ''))
+        arm, names, skeleton = self.rig_data[rel]
+        rig = bpy.data.objects.new((ob.name + ' rig')[:60], arm)
+        rig.matrix_world = ob.matrix_world
+        rig['frostbite_skeleton'] = skeleton
+        rig['frostbite_map_rig'] = rel
+        collection.objects.link(rig)
+        self.weight(ob, rig, names, tags['skin'])
+        ob.matrix_parent_inverse.identity()
+        ob.matrix_basis.identity()
+        self.rigged += 1
+        if tags.get('clip'):
+            try:
+                self.loop_clip(context, rig, rel, tags['clip'])
+                self.animated += 1
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                self.warnings.append('%s: clip not applied: %s' % (ob.name, error))
+
+    def loop_clip(self, context, rig, skeleton, rel):
+        """Put a decoded map clip on a rig, looping. Rigs of one skeleton playing one clip share its Action."""
+        from . import animation_import
+        from .rig_tools import _fcurves
+        key = (skeleton, rel)
+        action = self.clip_actions.get(key)
+        if action is None:
+            scene = context.scene
+            frames = scene.frame_start, scene.frame_end
+            context.view_layer.update()  # a new object gets its pose bones on the next update
+            clip = animation_import.load_clip(self.assets / rel)
+            action, _ = animation_import.apply_clip(context, rig, clip, set_fps=False)
+            scene.frame_start, scene.frame_end = frames  # a map keeps its own range; the clips cycle
+            # One key per clip frame: stretch them to the scene's frame rate so the clip plays at game speed.
+            stretch = scene.render.fps / scene.render.fps_base / float(clip.get('fps') or 30.0)
+            for fc in _fcurves(action):
+                if abs(stretch - 1.0) > 1e-3:
+                    for point in fc.keyframe_points:
+                        point.co.x = 1.0 + (point.co.x - 1.0) * stretch
+                        point.handle_left.x = 1.0 + (point.handle_left.x - 1.0) * stretch
+                        point.handle_right.x = 1.0 + (point.handle_right.x - 1.0) * stretch
+                    fc.update()
+                if not any(m.type == 'CYCLES' for m in fc.modifiers):
+                    fc.modifiers.new('CYCLES')
+            action.use_fake_user = False
+            self.clip_actions[key] = action
+            self.clip_length = max(self.clip_length, int(action.frame_range[1]))
+            return
+        rig.animation_data_create()
+        rig.animation_data.action = action
+        if hasattr(rig.animation_data, 'action_slot') and rig.animation_data.action_slot is None and action.slots:
+            rig.animation_data.action_slot = action.slots[0]
+
+    def weight(self, ob, rig, names, skin):
+        bones, weights = amsh.read_skin(self.assets / skin, len(ob.data.vertices))
         if bones.size and int(bones[weights > 0].max(initial=0)) >= len(names):
             raise ValueError('Skin names bones the skeleton does not have')
         vertex = np.repeat(np.arange(len(bones)), bones.shape[1])
@@ -312,9 +383,12 @@ class Importer:
                     ob.matrix_world = AXIS4 @ Matrix(place['matrix']) @ AXIS4.inverted()
                     if tags.get('source'):
                         ob['frostbite_source'] = tags['source']
-                    if self.rig and tags.get('skin') and tags.get('skeleton'):
+                    if self.rig and tags.get('skin') and tags.get('skeleton') and kind == 'frostbite_mesh':
                         try:
-                            self.bind(context, ob, tags, root)
+                            if tags.get('rig_instance'):
+                                self.place_rig(context, ob, tags, self.collection(root, tags.get('level_instance')))
+                            else:
+                                self.bind(context, ob, tags, root)
                         except (OSError, ValueError, KeyError, IndexError) as error:
                             self.warnings.append('%s: not rigged: %s' % (place.get('name'), error))
                     if kind == 'frostbite_collision':
@@ -350,8 +424,11 @@ class Importer:
             wm.progress_end()
         for space in (a.spaces.active for w in wm.windows for a in w.screen.areas if a.type == 'VIEW_3D'):
             space.clip_end = max(space.clip_end, 10000.0)
-        self.report({'INFO'}, 'Imported %d objects, %d meshes, %d materials in %.1fs%s' % (
+        if self.clip_length and context.scene.frame_end < self.clip_length:
+            context.scene.frame_end = self.clip_length  # show at least one full loop of the map's clips
+        self.report({'INFO'}, 'Imported %d objects, %d meshes, %d materials in %.1fs%s%s' % (
             count, len(self.meshes), len(self.materials), time.time() - start,
+            '; %d skinned objects rigged, %d animated' % (self.rigged, self.animated) if self.rigged else '',
             '; %d warnings (see console)' % len(self.warnings) if self.warnings else ''))
         for warning in self.warnings[:200]:
             print('Frostbite import:', warning)

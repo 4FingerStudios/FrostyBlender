@@ -2,7 +2,8 @@
 
 Each effect arrives as an empty holding one Geometry Nodes particle object per emitter, plus its
 lights, placed at the 3D cursor (several in a row). Press play: particles spawn from frame 1, or
-from the time set as "Start (s)" on each emitter's modifier.
+from the time set as "Start (s)" on each emitter's modifier. Sounds come in as Sequencer strips,
+and an effect whose smoke drifts on the wind has a Wind (m/s) setting, shown here when it is selected.
 """
 import json
 import os
@@ -14,7 +15,7 @@ import bpy
 from bpy.props import BoolProperty, CollectionProperty, EnumProperty, IntProperty, StringProperty
 from mathutils import Vector
 
-from . import BRIDGE, GAMES, _check_bfn, _check_paths, _redraw, _wrap, draw_credits, prefs, scene_import
+from . import BRIDGE, GAMES, game_ok, _check_bfn, _check_paths, _redraw, _wrap, draw_credits, prefs, scene_import
 
 SOURCES = {'GW1': 'gw1_path', 'GW2': 'gw2_path', 'BFN': 'bfn_path'}
 _data = {}    # game folder -> discover result
@@ -84,7 +85,7 @@ class FROSTBITE_OT_effects_scan(bpy.types.Operator):
         if not _check_paths(self, p, False):
             return {'CANCELLED'}
         game = _game(context)
-        if not game or not (Path(bpy.path.abspath(game)) / GAMES[SOURCES[state.source]]).is_file():
+        if not game_ok(game, GAMES[SOURCES[state.source]]):
             self.report({'ERROR'}, 'Set the %s game folder in the add-on preferences' % state.source)
             return {'CANCELLED'}
         out = Path(bpy.app.tempdir or os.environ.get('TEMP', '.')) / 'frostbite_effects.json'
@@ -272,7 +273,26 @@ class FROSTBITE_PT_effects(bpy.types.Panel):
                 box.label(text=line)
         if not context.scene.camera:
             layout.label(text='Add a camera: quads turn to face it', icon='INFO')
+        _draw_selected(layout, context)
         draw_credits(layout)
+
+
+def _draw_selected(layout, context):
+    """The selected effect's own settings: its wind, and what of it is not shown."""
+    effect = context.active_object
+    while effect is not None and effect.get('frostbite_effect') is None:
+        effect = effect.parent
+    if effect is None:
+        return
+    box = layout.box()
+    box.label(text=effect.name, icon='SHADERFX')
+    if 'Wind (m/s)' in effect:
+        box.prop(effect, '["Wind (m/s)"]', text='Wind (m/s)')
+    if effect.get('frostbite_sounds'):
+        box.label(text='%d sound strips in the Sequencer' % len(effect['frostbite_sounds']), icon='SOUND')
+    if effect.get('frostbite_notes'):
+        for line in _wrap('Not shown: ' + effect['frostbite_notes'], 40)[:4]:
+            box.label(text=line)
 
 
 classes = (FrostbiteEffectGroup, FrostbiteEffect, FrostbiteEffectsState, FROSTBITE_OT_effects_scan,

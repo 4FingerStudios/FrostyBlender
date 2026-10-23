@@ -26,6 +26,18 @@ GAMES = {'gw1_path': 'PVZ.Main_Win64_Retail.exe', 'gw2_path': 'GW2.Main_Win64_Re
          'bfn_path': 'PVZBattleforNeighborville.exe'}
 
 
+def game_ok(folder, exe):
+    """The game folder holds the game's executable, or for GW1 an Xbox 360 disc copy (Default.xex beside
+    Data/Xenon) on its own or in a folder with its title update and DLC packs (tools/gw1_x360.py)."""
+    if not folder:
+        return False
+    folder = Path(bpy.path.abspath(folder))
+    if (folder / exe).is_file():
+        return True
+    return exe == GAMES['gw1_path'] and any((disc / 'Default.xex').is_file() and (disc / 'Data/Xenon').is_dir()
+                                            for disc in [folder] + list(folder.glob('*/')))
+
+
 def default_game(exe):
     """The first install folder holding `exe` under the usual EA app, Origin and Steam locations."""
     roots = [Path('C:/Program Files/EA Games'), Path('C:/Program Files (x86)/Origin Games'),
@@ -143,7 +155,7 @@ class FrostbitePreferences(bpy.types.AddonPreferences):
         box.label(text='Game folders', icon='FILE_FOLDER')
         for name, exe in GAMES.items():
             folder = getattr(self, name)
-            ok = bool(folder) and (Path(bpy.path.abspath(folder)) / exe).is_file()
+            ok = game_ok(folder, exe)
             row = box.row(align=True)
             row.prop(self, name)
             row.label(text='', icon='CHECKMARK' if ok else 'ERROR')

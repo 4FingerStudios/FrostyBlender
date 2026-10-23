@@ -96,7 +96,7 @@ def discover(game):
                     low = a['name'].lower() if a['kind'] == 'ebx' else ''
                     if low.endswith('_mesh'):
                         meshes.setdefault(low, (a['name'], bundle[0]))
-                    elif low.endswith('meshvariationdb_win32'):
+                    elif low.endswith(tuple('meshvariationdb_' + p for p in (bfn.PC,) + bfn.CONSOLES)):  # gen4b: Xbox One data
                         dbs.add(a['name'])
             maps.append((entry, meshes, sorted(dbs)))
     else:

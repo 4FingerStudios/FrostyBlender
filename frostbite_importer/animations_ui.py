@@ -13,7 +13,7 @@ from pathlib import Path
 import bpy
 from bpy.props import BoolProperty, CollectionProperty, EnumProperty, IntProperty, PointerProperty, StringProperty
 
-from . import BRIDGE, GAMES, _check_paths, _redraw, _wrap, animation_import, draw_credits, prefs
+from . import BRIDGE, GAMES, game_ok, _check_paths, _redraw, _wrap, animation_import, draw_credits, prefs
 
 SOURCES = {'GW1': 'gw1_path', 'GW2': 'gw2_path', 'BFN': 'bfn_path'}
 _data = {}  # game folder -> discover result
@@ -107,7 +107,7 @@ class FROSTBITE_OT_animations_scan(bpy.types.Operator):
         if not _check_paths(self, p, False):
             return {'CANCELLED'}
         game = _game(context)
-        if not game or not (Path(bpy.path.abspath(game)) / GAMES[SOURCES[state.source]]).is_file():
+        if not game_ok(game, GAMES[SOURCES[state.source]]):
             self.report({'ERROR'}, 'Set the %s game folder in the add-on preferences' % state.source)
             return {'CANCELLED'}
         out = Path(bpy.app.tempdir or os.environ.get('TEMP', '.')) / 'frostbite_animations.json'

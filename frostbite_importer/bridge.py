@@ -202,7 +202,7 @@ def run_import(args):
     if not re.fullmatch(r'[A-Za-z0-9_-]+', mapname):
         raise ValueError('Invalid map package name')
     exported, textures, assets, scene = job / 'export', job / 'textures', job / 'assets', job / 'scene.json'
-    gw1 = (game / 'PVZ.Main_Win64_Retail.exe').is_file()
+    gw1 = (game / 'PVZ.Main_Win64_Retail.exe').is_file() or (game / 'xenon-view.json').is_file()  # PC or Xbox 360 view
     # GW1 shares GW2's archive family and converter; gw1.py adapts its texture headers.
     gw2 = gw1 or (game / 'GW2.Main_Win64_Retail.exe').is_file()
     bfn = (game / 'PVZBattleforNeighborville.exe').is_file()
@@ -266,6 +266,14 @@ def main():
     p.add_argument('--dest', type=Path, help='explorer-export: the folder to save into')
     p.add_argument('--language', help='explorer-text: the language to list (default English)')
     args = p.parse_args()
+    if (args.tools / 'gw1_x360.py').is_file():
+        # An Xbox 360 GW1 disc and its packs: every tool reads them through their PC-layout view.
+        sys.path.insert(0, str(args.tools))
+        import gw1_x360
+        try:
+            args.game = gw1_x360.game_root(args.game)
+        except (OSError, ValueError) as error:
+            print('Xbox 360 game folder:', error, file=sys.stderr)
     if args.action.endswith('discover') or args.action == 'icons' or args.action.startswith('explorer-'):
         try:
             {'discover': discover, 'cosmetics-discover': cosmetics_discover, 'props-discover': props_discover,

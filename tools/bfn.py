@@ -28,8 +28,21 @@ EBX_V4 = 0x0FB4D1CE
 TEXTURE_TYPE, MESHSET_TYPE, TERRAIN_TREE_TYPE = 0x6BDE20BA, 0x49B156D4, 0x22FE8AC8
 
 
+# Bundle names start with the platform they were cooked for: 'win32/' on PC, 'gen4b/' (Xbox One)
+# or 'gen4a/' (PS4) in console data packed for PC. The archive lists every bundle under the PC
+# name, so levels, cosmetics and props match one naming whatever the data's platform.
+PC = 'win32'
+CONSOLES = ('gen4a', 'gen4b')
+
+
 def is_bfn(game):
     return (Path(game) / EXE).is_file()
+
+
+def canonical(name):
+    """'gen4b/levels/x/x' -> 'Win32/levels/x/x', as PC bundles are spelt; PC names are unchanged."""
+    head, sep, rest = name.partition('/')
+    return 'Win32' + sep + rest if sep and head.lower() in CONSOLES else name
 
 
 # ---------------- crypto and compression ----------------
@@ -205,6 +218,7 @@ class Archive:
         self.install.setdefault('Patch', self.install.get('Data', []))
         self.tocs, self.handles, self.lock = {}, {}, threading.Lock()
         self.read_locks = {}
+        self.platform = None  # the bundles' own platform prefix, known once a TOC is read
         self.oodle = Oodle(game)
 
     def read(self, path, offset, size):
@@ -234,6 +248,9 @@ class Archive:
         for i in range(bundles):
             name_at, size_flag, offset = struct.unpack_from('>IIQ', body, bundle_at + 16 * i)
             name = cstring(body, names + name_at)
+            if self.platform is None and '/' in name:
+                self.platform = name.split('/', 1)[0].lower()
+            name = canonical(name)
             out['bundles'][name.lower()] = (name, offset, size_flag & 0x3fffffff, size_flag >> 30 == 1, out)
         table = struct.unpack_from('>%dI' % words, body, chunk_data) if words else ()
         for i in range(chunk_count):
@@ -310,7 +327,7 @@ class Archive:
                 continue
             for lower, entry in self.toc(sb)['bundles'].items():
                 parts = lower.split('/')
-                if len(parts) == 4 and parts[:2] == ['win32', 'levels'] and parts[2] == parts[3]:
+                if len(parts) == 4 and parts[:2] == [PC, 'levels'] and parts[2] == parts[3]:
                     found.setdefault(parts[2], sb)
         return found
 
@@ -549,6 +566,19 @@ def texture_header(header, chunk_size):
     return bytes(h[:32]) + b'\0' * 4 + bytes(h[32:]) + b'\0' * 8
 
 
+def texture_chunk(header, data):
+    """(chunk, header) of a texture in the PC layout. Xbox One textures are detiled (tools/bfn_xbox.py);
+    PC textures, and formats the reader does not decode, come back as they are with header None."""
+    import bfn_xbox
+    if not bfn_xbox.is_tiled(header):
+        return data, None
+    try:
+        linear_header, linear = bfn_xbox.detile(header, data)
+    except ValueError:
+        return data, None
+    return linear, linear_header
+
+
 def _pointers(value):
     """Every pointer object inside an EBX value."""
     if isinstance(value, dict):
@@ -613,7 +643,7 @@ def level_bundles(archive, package):
     sb = archive.levels().get(leaf)
     if not sb:
         raise ValueError('No Battle for Neighborville level named ' + package)
-    prefix = 'win32/levels/%s/' % leaf
+    prefix = PC + '/levels/%s/' % leaf
     return [e for k, e in sorted(archive.toc(sb)['bundles'].items()) if k.startswith(prefix)]
 
 
@@ -813,9 +843,14 @@ def export(game, package, output, key, names, jobs=4, bundles=None, extra_ebx=()
                 inventory['errors'].append({'name': guid, 'stage': 'chunk', 'error': error})
                 continue
             path = 'chunk/%s.bin' % guid
+            users = by_chunk.get(guid, [])
+            if users:
+                # Console textures are tiled: written in the PC layout, with headers to match.
+                data, linear = texture_chunk(users[0][1], data)
+                users = [(item, linear or header) for item, header in users]
             (output / path).write_bytes(data)
             inventory['assets'].append({'kind': 'chunk', 'name': guid, 'guid': guid, 'path': path, 'bytes': len(data)})
-            for item, header in by_chunk.get(guid, []):
+            for item, header in users:
                 try:
                     (output / item['path']).write_bytes(texture_header(header, len(data)))
                 except ValueError as err:

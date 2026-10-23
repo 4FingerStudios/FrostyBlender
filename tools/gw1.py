@@ -23,7 +23,9 @@ FORMATS = {0: 54, 3: 60, 4: 62, 19: 64, 20: 54, 11: 18}
 
 
 def is_gw1(game):
-    return (Path(game) / EXE).is_file()
+    # The PC install, or an Xbox 360 disc and its packs seen through their view (gw1_x360.py).
+    import gw1_x360
+    return (Path(game) / EXE).is_file() or gw1_x360.is_view(game)
 
 
 def discover(game):
@@ -290,6 +292,8 @@ if __name__ == '__main__':
     parser.add_argument('--out')
     parser.add_argument('--jobs', type=int, help='Archive workers (default: AURA_IMPORT_JOBS or up to 8)')
     args = parser.parse_args()
+    import gw1_x360
+    args.game = gw1_x360.game_root(args.game)  # an Xbox 360 folder reads through its view
     if args.map and args.out:
         result = export(args.game, args.map, args.out, args.jobs)
         print('GW1 assets:', len(result['assets']), 'errors:', len(result['errors']))

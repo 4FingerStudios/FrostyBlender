@@ -343,8 +343,8 @@ def _export_bfn(game, names, output):
                     ref = archive.chunk(guid) or chunk_refs.get(guid)
                     if not ref:
                         raise ValueError('Texture chunk not found')
-                    data = archive.fetch(ref)
-                    header = bfn.texture_header(header, len(data))
+                    data, linear = bfn.texture_chunk(header, archive.fetch(ref))  # Xbox One data is detiled
+                    header = bfn.texture_header(linear or header, len(data))
                 except (ValueError, OSError, struct.error, IndexError) as error:
                     inventory['errors'].append({'name': name, 'stage': 'texture', 'error': str(error)})
                     continue

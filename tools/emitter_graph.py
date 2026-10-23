@@ -11,7 +11,11 @@ Engine record fields, read off how the shaders use them:
     192, 196    emitter age, emitter lifespan       200, 204    random seed, particle lifespan
     208..216    ring start, alive count, capacity   224, 228    force/exclusion volume range
     240, 244    particle buffer base, stride        252         parent particle (child emitters)
-Collision against the depth buffer is switched off by a view that puts every point off screen.
+Graphs that collide sample the depth buffer (t12) through the view (t10): its view-projection rows at 0,
+their inverse at 64, the camera at 240 and one texel's size in clip space at 896, with reversed depth (near
+is 1). Given a ground plane, those graphs see an orthographic view straight down onto it and a depth buffer
+holding it, so they bounce off it with their own restitution; otherwise the view puts every point off
+screen and nothing collides.
 """
 import struct
 
@@ -110,8 +114,15 @@ class Graph:
                 r[at:at + 4] = np.uint32(int(p.get('IntValue', 0)) & 0xFFFFFFFF)
         return r
 
-    def run(self, duration, loop, seed=1.0, fps=30.0, max_particles=4000, keys=17):
-        """Simulate; returns per-particle keyed values {'spawn', 'life', name: (n, keys, c)}."""
+    def collides(self):
+        """Whether the simulate shader reads the depth buffer (t12), i.e. its particles collide."""
+        return any(ins.op in (dxbc.OP['GATHER4'], dxbc.OP['SAMPLE'], dxbc.OP['SAMPLE_L'], dxbc.OP['LD'])
+                   and any(o.type == dxbc.RESOURCE and o.index and o.index[0][0] == DEPTH for o in ins.operands)
+                   for ins in self.simulate['code'])
+
+    def run(self, duration, loop, seed=1.0, fps=30.0, max_particles=4000, keys=17, ground=None):
+        """Simulate; returns per-particle keyed values {'spawn', 'life', name: (n, keys, c)}.
+        `ground` (up, height): a plane in emitter space that colliding graphs bounce off."""
         capacity = max(1, min(self.max_count, max_particles))
         words = np.zeros(capacity * self.stride // 4, np.uint32)
         dt = 1.0 / fps
@@ -121,7 +132,13 @@ class Graph:
         view = _view()
         frame_constants = np.zeros(176 // 4, np.uint32)
         bindings_tex = dict(self.textures)
-        bindings_tex.setdefault(12, dxbc.Texture(np.ones((1, 1, 4), np.float32)))
+        bindings_tex.setdefault(DEPTH, dxbc.Texture(np.ones((1, 1, 4), np.float32)))
+        sim_view, sim_tex = view, bindings_tex
+        if ground is not None and self.collides():
+            sim_view = _ground_view(*ground)
+            depth = np.full((GROUND_TEXELS, GROUND_TEXELS, 4), GROUND_DEPTH, np.float32)
+            sim_tex = {**bindings_tex, DEPTH: dxbc.Texture(depth, clamp=True)}
+            self.notes.append('collides with the ground')
         start, count, owed, t = 0, 0, 0.0, 0.0
         alive_id = np.full(capacity, -1, np.int64)
         born, died = [], []
@@ -164,11 +181,11 @@ class Graph:
                 cb = np.zeros((2, 4), np.uint32)
                 cb[0].view(np.float32)[:] = [dt, fps, 0.0, 0.0]
                 cb[1] = [0, NO_PARENT, 0, 0]
-                dxbc.run(self.simulate, count, {'cb': {0: cb}, 'buffers': {4: (rec, RECORD), 10: (view, 944),
+                dxbc.run(self.simulate, count, {'cb': {0: cb}, 'buffers': {4: (rec, RECORD), 10: (sim_view, 944),
                                                                          11: (frame_constants, 176),
                                                                          5: (np.zeros(16, np.uint32), 64),
                                                                          8: (np.zeros(4, np.uint32), 4)},
-                                               'uavs': {0: words}, 'textures': bindings_tex})
+                                               'uavs': {0: words}, 'textures': sim_tex})
             t += dt
             # Record the living, retire the dead.
             slots = (start + np.arange(count)) % capacity
@@ -241,6 +258,36 @@ def _view():
     f[16:32] = np.eye(4, dtype=np.float32).ravel()
     f[60:63] = [0.0, 2.0, 8.0]
     f[224:226] = [1920.0, 1080.0]
+    return v
+
+
+DEPTH = 12            # the depth buffer's texture slot
+GROUND_TEXELS = 64
+GROUND_DEPTH = 0.5    # the ground's depth in the downward view: halfway between its near and far planes
+GROUND_ABOVE, GROUND_FAR, GROUND_EXTENT = 50.0, 100.0, 60.0
+
+
+def _ground_view(up, height):
+    """t10: an orthographic view straight down `up` onto the plane up . p = height (emitter space), which
+    the depth buffer at GROUND_DEPTH holds. Reversed depth: a point h above the plane is at 0.5 + h / far."""
+    n = np.asarray(up, np.float64)
+    n = n / max(np.linalg.norm(n), 1e-9)
+    helper = np.array([1.0, 0, 0]) if abs(n[0]) < 0.9 else np.array([0, 0, 1.0])
+    u = np.cross(n, helper)
+    u /= np.linalg.norm(u)
+    w = np.cross(n, u)
+    e, far = GROUND_EXTENT, GROUND_FAR
+    m = np.zeros((4, 4))  # clip = [p, 1] @ m
+    m[:3, 0], m[:3, 1], m[:3, 2] = u / e, w / e, n / far
+    m[3, 2], m[3, 3] = GROUND_DEPTH - height / far, 1.0
+    inverse = np.zeros((4, 4))  # [p, 1] = clip @ inverse
+    inverse[0, :3], inverse[1, :3], inverse[2, :3] = u * e, w * e, n * far
+    inverse[3, :3], inverse[3, 3] = n * (height - GROUND_DEPTH * far), 1.0
+    v = _view()
+    f = v.view(np.float32)
+    f[0:16] = m.astype(np.float32).ravel()
+    f[16:32] = inverse.astype(np.float32).ravel()
+    f[224:226] = 2.0 / GROUND_TEXELS  # one texel, in clip space
     return v
 
 

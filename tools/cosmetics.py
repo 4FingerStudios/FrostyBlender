@@ -55,6 +55,9 @@ def game_kind(game):
     for kind, exe in (('gw1', GW1_EXE), ('gw2', GW2_EXE), ('bfn', BFN_EXE)):
         if (game / exe).is_file():
             return kind
+    import gw1_x360
+    if gw1_x360.is_view(game):  # an Xbox 360 GW1 disc and its packs, seen through their view
+        return 'gw1'
     raise ValueError('Not a Garden Warfare 1, Garden Warfare 2 or Battle for Neighborville folder: %s' % game)
 
 

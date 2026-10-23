@@ -10,7 +10,7 @@ as a folder tree, with a look inside one file and an export of any selection.
     python explorer.py text-export --game GAME --dest FOLDER --out result.json
 
 Exports: EBX files as readable JSON plus the raw data, textures (UI art included) as PNG, atlas flipbooks as
-PNG, sounds (SoundWaveAsset) as WAV through audio.py, and other resources as their raw bytes with a fitting
+PNG, menu movies (Scaleform) raw plus their images as PNG through scaleform.py, sounds (SoundWaveAsset) as WAV through audio.py, and other resources as their raw bytes with a fitting
 extension. The game's UI text, every language, goes to CSV and JSON through loc.py. Meshes go to Blender through the
 add-on's Props import instead. Battle for Neighborville EBX need the initfs key (AURA_BFN_KEY) and the type
 name table (--names) to become JSON; without them they are saved raw. Game files are only read.
@@ -304,6 +304,11 @@ def export(game, items, reader, dest, size=2048):
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(content)
                     written.append(str(target))
+                    if target.suffix in ('.gfx', '.swf'):  # menu movies: their images as PNG, in a folder beside them
+                        import scaleform
+                        images, failed = scaleform.export_images(game, kind, name, content, reader, base, size)
+                        written += images
+                        errors += failed
             if data is None and resource is None:
                 errors.append({'name': name, 'error': 'Not found in the game archives'})
         except Exception as error:  # one file must not stop the others
@@ -377,6 +382,13 @@ def inspect(game, name, reader):
                 info['preview'] = str(target)
         except Exception as error:
             info['preview_error'] = str(error)
+        if _extension(rtype, content) in ('.gfx', '.swf'):
+            try:
+                import scaleform
+                info['movie'] = scaleform.summary(scaleform.Movie(content), name)
+                info['images'] = info['movie']['image_count']
+            except Exception as error:
+                info['movie_error'] = str(error)
     if data is None and resource is None:
         raise ValueError('Not found in the game archives: ' + name)
     return info

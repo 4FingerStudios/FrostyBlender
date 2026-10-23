@@ -101,7 +101,10 @@ def streamed_tree(r, rect):
         if bit():
             descriptor()
         bit()  # metadata
-        out = {'rect': rect, 'heights': None, 'guid': guid if size >= SIDE * SIDE * 2 else None,
+        # A tile's chunk starts with the 39919-byte height page only when it has one; the other rasters
+        # (and chunks without heights, as Xbox One data gives coarse tiles) are even-sized.
+        heights = size >= NODE_PAYLOAD and (size - NODE_PAYLOAD) % 2 == 0
+        out = {'rect': rect, 'heights': None, 'guid': guid if heights else None,
                'size': size, 'children': []}
         if bit():
             x, z, X, Z = rect

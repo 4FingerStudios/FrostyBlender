@@ -8,6 +8,9 @@ import numpy as np
 from convert import Archive, png, write_mesh, write_skin, read_attr, skin_attrs
 import bfn_maps
 import bfn_terrain
+import bfn_decals
+import bfn_map_effects
+import bfn_water
 
 MESHSET_TYPE = 0x49B156D4
 # Section stride, vertex declaration offset and stream slots of each game's MeshSet sections.
@@ -141,6 +144,11 @@ class LegacyConverter:
         self.variations = self.material_variations()
         self.floor = []
         self.terrains = set()
+        # Battle for Neighborville water materials, decal volumes and placed effects (bfn_*.py).
+        self.water = set()
+        self.water_entities = []
+        self.decals = bfn_decals.Decals(self)
+        self.effects = bfn_map_effects.MapEffects(self, textures)
 
     # ---- references ----
     def resolve(self, doc, pointer):
@@ -186,6 +194,12 @@ class LegacyConverter:
         params = []
         if found:
             mat_doc, mat = found
+            if self.game == 'bfn':
+                graph = bfn_water.graph_name(self, mat_doc, mat)
+                if bfn_water.is_water(graph):
+                    rel = bfn_water.material(self, mat, graph, section_name)
+                    self.water.add(rel)
+                    return rel
             shader = mat.get('Shader') or {}
             # Battle for Neighborville materials often name a SurfaceShaderPreset as their shader,
             # which holds the textures. Then the mesh variation, then the material's own override them.
@@ -261,6 +275,16 @@ class LegacyConverter:
         name = mesh_obj.get('Name', '').split('/')[-1]
         tags = {'mesh': rel, 'source': mesh_obj.get('Name', '')}
         tags.update({f'material_{i}': m for i, m in enumerate(mats)})
+        if self.water and all(m in self.water for m in mats):
+            # A water surface: drawn, but neither walked on nor a spawn floor.
+            tags['surface'] = 'water'
+            # Seas are large meshes whose pivot can lie outside a cropped area they cover.
+            world = positions @ matrix[:3, :3].T + matrix[:3, 3]
+            bounds = (*world[:, [0, 2]].min(axis=0).tolist(), *world[:, [0, 2]].max(axis=0).tolist())
+            places.append({'kind': 'frostbite_mesh', 'name': name, 'matrix': matrix.tolist(), 'tags': tags, 'values': {'collision': 0},
+                           '_source': source, '_bounds': bounds})
+            self.counts['instances'] += 1
+            return
         places.append({'kind': 'frostbite_mesh', 'name': name, 'matrix': matrix.tolist(), 'tags': tags, 'values': {'collision': 1},
                        '_source': source})
         self.floor.append((rid_of(mesh_obj), matrix))
@@ -362,6 +386,12 @@ class LegacyConverter:
                     for other in doc['objects']:
                         if other.get('$type') == 'TerrainEntityData':
                             self.walk(places, doc, other, matrix, source, depth + 1, stack)
+            elif kind == 'EffectReferenceObjectData' and self.game == 'bfn':
+                if not obj.get('Excluded'): self.effects.add(doc, obj, matrix, source)
+            elif kind == 'WaterEntityData' and self.game == 'bfn':
+                self.water_entities.append((doc, obj, matrix @ transform(obj.get('Transform', {}))))
+            elif kind == 'EnvironmentDecalVolumeData' and self.game == 'bfn':
+                self.decals.add(doc, obj, matrix, source)
             elif kind.endswith('ReferenceObjectData'):
                 if obj.get('Excluded'): return
                 if kind == 'SubWorldReferenceObjectData' and not self.environment(obj): return
@@ -444,7 +474,10 @@ class LegacyConverter:
                if bfn_maps.anchor((p.get('_source') or '').split('/')[-1], self.area)]
         box = bfn_maps.bounds(own or self.anchor_points())
         if not box: raise ValueError('The level has nothing named %r to crop the map to' % self.area)
-        kept = [p for p in places if bfn_maps.inside(box, p['matrix'][0][3], p['matrix'][2][3])]
+        self.crop_box = box
+        kept = [p for p in places if bfn_maps.inside(box, p['matrix'][0][3], p['matrix'][2][3])
+                or '_bounds' in p and p['_bounds'][0] <= box[2] and box[0] <= p['_bounds'][2]
+                and p['_bounds'][1] <= box[3] and box[1] <= p['_bounds'][3]]
         self.floor = [(rid, m) for rid, m in self.floor if bfn_maps.inside(box, m[0, 3], m[2, 3])]
         self.counts['cropped'] = len(places) - len(kept)
         self.counts['crop_bounds'] = [round(v, 1) for v in box]
@@ -489,7 +522,7 @@ class LegacyConverter:
         places = []
         self.walk(places, entry[1], entry[1]['objects'][0], np.eye(4), root_name)
         if self.area: places = self.crop(places)
-        for p in places: p.pop('_source', None)
+        for p in places: p.pop('_source', None); p.pop('_bounds', None)
         if not places: raise ValueError('No map placements were converted')
         positions = np.array([np.array(p['matrix'])[:3, 3] for p in places])
         spawn = np.median(positions, axis=0)
@@ -500,12 +533,28 @@ class LegacyConverter:
             if floor is not None: spawn = np.array(candidate, dtype=np.float64); break
         if floor is None: raise ValueError('No flat floor found for the editor spawn; choose a spawn explicitly')
         spawn[1] = floor + 0.5
+        if self.game == 'bfn':
+            # Decals and effects come after the spawn is chosen, so they do not move it.
+            box = getattr(self, 'crop_box', None)
+            kept = (lambda x, z: bfn_maps.inside(box, x, z)) if box else (lambda x, z: True)
+            places += bfn_water.sea(self, self.water_entities, places, box)
+            places += self.decals.build(places, kept)
+            places += self.effects.build(kept)
+            self.counts.update(self.decals.counts)
+            self.counts.update(self.effects.counts)
+            self.counts['water_surfaces'] = sum(p.get('tags', {}).get('surface') == 'water' for p in places)
+            self.counts['sea_levels'] = [p['tags']['sea_level'] for p in places if 'sea_level' in p.get('tags', {})]
         places.insert(0, {'kind': 'frostbite_environment', 'name': title + ' outdoor settings', 'at': [0, 0, 0], 'tags': {},
                           'values': {'stream_load_distance': 256, 'stream_unload_distance': 320, 'sun_intensity': 2.4}})
         places.insert(0, {'kind': 'spawn', 'name': title + ' editor spawn', 'at': spawn.tolist(), 'tags': {}, 'values': {}})
         report = {'map': root_name, 'game': self.game, 'placements': len(places), 'meshes': len(self.meshes), 'materials': len(self.materials),
                   'textures': len(self.texture_paths), 'counts': self.counts, 'errors': self.errors,
-                  'limitations': ['Static meshes and Battle for Neighborville terrain heightfields only: water, decals, effects and gameplay entities are not converted.',
+                  'limitations': (['Static meshes, terrain heightfields, water surfaces, decal volumes and ambient effects; gameplay entities are not converted.',
+                                   'Water uses the authored water meshes with an animated Blender water shader; depth colour, foam and flow are not executed.',
+                                   'Decal volumes are projected onto the map triangles inside them and alpha blended; native decal masks are not executed.',
+                                   'Effects that gameplay starts (AutoStart off) are skipped; set AURA_BFN_MAP_EFFECTS=all to place them.']
+                                  if self.game == 'bfn' else
+                                  ['Static meshes and Battle for Neighborville terrain heightfields only: water, decals, effects and gameplay entities are not converted.']) + [
                                   'Terrain uses one authored grass surface; native terrain splat layers, holes and scatter meshes are not translated.',
                                   'Rendered triangles serve as collision; original Havok collision is not translated.',
                                   'Materials use base colour and normal maps with Aura shading approximations.',
