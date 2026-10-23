@@ -59,6 +59,15 @@ public sealed class Icons
         return result;
     }
 
+    /// <summary>A cached loading screen for the window's backdrop: the game's front-end hub when it has one, else any
+    /// map. Null until the Maps list has fetched its pictures once.</summary>
+    public string? Backdrop(string game)
+    {
+        var maps = Known(game).Where(kv => kv.Key.StartsWith("m:") && kv.Value != null && File.Exists(kv.Value)).ToList();
+        return maps.Where(kv => kv.Key.Contains("hub", StringComparison.OrdinalIgnoreCase) || kv.Key.Contains("socialspace", StringComparison.OrdinalIgnoreCase))
+                   .Concat(maps).Select(kv => kv.Value).FirstOrDefault();
+    }
+
     /// <summary>Finds and decodes the icons for the requests not cached yet.</summary>
     public async Task<Dictionary<string, string?>> Fetch(string game, IReadOnlyList<JsonObject> portraits, IReadOnlyList<JsonObject> items,
                                                          IReadOnlyList<JsonObject>? maps = null)

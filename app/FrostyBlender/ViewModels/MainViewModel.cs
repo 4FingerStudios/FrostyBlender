@@ -112,6 +112,8 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private Bitmap? _discordAvatar;
     [ObservableProperty] private string _discordStatus = "";
     [ObservableProperty] private bool _signingIn;
+    [ObservableProperty] private Bitmap? _backdrop;
+    private string? _backdropPath;
 
     public Section Section => SelectedNav?.Section ?? Section.Maps;
     public bool IsBrowser => Section is not (Section.Settings or Section.Explorer);
@@ -286,6 +288,7 @@ public partial class MainViewModel : ObservableObject
 
     partial void OnGameChanged(string value)
     {
+        UpdateBackdrop();
         if (IsExplorer) _ = LoadExplorer(false);
         else _ = Scan(false);
     }
@@ -690,11 +693,24 @@ public partial class MainViewModel : ObservableObject
     }
 
     // ------------------------------------------------------------ Blender status
+    /// <summary>The window's blurred backdrop: one of this game's cached loading screens (Icons.Backdrop).</summary>
+    private void UpdateBackdrop()
+    {
+        var path = _icons.Backdrop(Game);
+        if (path == _backdropPath) return;
+        _backdropPath = path;
+        try { Backdrop = path == null ? null : new Bitmap(path); }
+        catch (Exception) { Backdrop = null; }
+    }
+
     private async Task Tick()
     {
         // Blender rewrites link.json every few seconds; pick up a newer add-on without a restart.
         var hadIcons = _icons.Problem == null && _link.Info != null;
         LinkLoaded = _link.Load() || LinkLoaded;
+        UpdateBackdrop();
+        if (LinkLoaded && !GameFonts.Ready)
+            _ = GameFonts.Extract(_link.Info).ContinueWith(t => { if (t.Result) Dispatcher.UIThread.Post(GameFonts.Apply); });
         _ = UpdatePresence();
         if (!hadIcons && _link.Info != null && _icons.Problem == null && IsBrowser && _all.Count > 0)
         {

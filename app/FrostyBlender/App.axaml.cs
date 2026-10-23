@@ -8,7 +8,11 @@ namespace FrostyBlender;
 
 public partial class App : Application
 {
-    public override void Initialize() => AvaloniaXamlLoader.Load(this);
+    public override void Initialize()
+    {
+        AvaloniaXamlLoader.Load(this);
+        Services.GameFonts.Apply();
+    }
 
     public override void OnFrameworkInitializationCompleted()
     {
