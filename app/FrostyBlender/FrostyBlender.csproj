@@ -9,7 +9,7 @@
     <ApplicationIcon>Assets/icon.ico</ApplicationIcon>
     <AssemblyName>FrostyBlender</AssemblyName>
     <RootNamespace>FrostyBlender</RootNamespace>
-    <Version>1.7.1</Version>
+    <Version>1.7.2</Version>
     <Product>FrostyBlender</Product>
     <Company>4FingerStudios</Company>
     <Copyright>4FingerStudios. GPL-3.0-or-later.</Copyright>
