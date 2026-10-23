@@ -5,7 +5,8 @@
 Needs Windows, Python 3, CMake and Visual Studio (C++ workload) to build the texture reader,
 and Blender 4.2+ to pack the extension. Writes dist/v<version>/frostbite_importer-<version>-windows-x64.zip,
 plus, when the .NET 8 SDK is installed, dist/v<version>/FrostyBlender-<version>-windows-x64.exe (the desktop
-app, one self-contained file). The zip needs nothing else on the player's PC: the import tools run on Blender's own Python, and
+app, one self-contained file). A new app build for an add-on version that already has one goes to
+dist/app-v<app version>/ instead, with a copy of the add-on zip. The zip needs nothing else on the player's PC: the import tools run on Blender's own Python, and
 the zip carries them, the reader (static C++ runtime) and the BFN type name table.
 
 The BFN key is never bundled; players enter their own in the add-on preferences.
@@ -73,7 +74,17 @@ def build_app(work):
                    check=True, stdout=subprocess.DEVNULL)
     exe = out / 'FrostyBlender.exe'
     match = re.search(r'<Version>([^<]+)</Version>', (APP / 'FrostyBlender.csproj').read_text(encoding='utf-8'))
-    target = DIST / ('FrostyBlender-%s-windows-x64.exe' % (match.group(1) if match else 'dev'))
+    app_version = match.group(1) if match else 'dev'
+    name = 'FrostyBlender-%s-windows-x64.exe' % app_version
+    folder = DIST
+    if any(p.name != name for p in DIST.glob('FrostyBlender-*-windows-x64.exe')):
+        # This add-on version already shipped with another app: an app-only release gets its own folder
+        # (dist/app-v1.8.0/), with a copy of the unchanged add-on zip so it holds the whole release.
+        folder = DIST.parent / ('app-v' + app_version)
+        folder.mkdir(parents=True, exist_ok=True)
+        for addon_zip in DIST.glob('frostbite_importer-*-windows-x64.zip'):
+            shutil.copy2(addon_zip, folder / addon_zip.name)
+    target = folder / name
     shutil.copy2(exe, target)
     return target
 
