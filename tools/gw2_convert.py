@@ -9,6 +9,9 @@ from gw2_terrain import terrain_tree, tile_heights, height_section
 from gw2_groups import group_instances, gw1_part_poses
 
 
+SPAWNS = ('PVZCharacterSpawnReferenceObjectData', 'AlternateSpawnEntityData', 'VehicleSpawnReferenceObjectData')
+
+
 class SkinnedMeshUnsupported(ValueError):
     """Animated geometry is outside this static environment importer."""
 
@@ -184,6 +187,8 @@ class Gw2Converter(Converter):
         self.unplaced_group_instances = []
         from map_rigs import MapRigs
         self.map_rigs = MapRigs(self)  # skinned map objects: skeleton, skin and looping clip
+        from markers import Markers
+        self.markers = Markers(archive.inventory.get('profile', 'gw2'))  # spawns, teleporters, purchase spots
         for asset, doc in archive.documents.values():
             if asset.get('root_type') != 'MeshVariationDatabase':
                 continue
@@ -409,6 +414,11 @@ class Gw2Converter(Converter):
             raise ValueError('GW2 editor spawn has no generated collision floor')
         return max(heights)
 
+    def document_name(self, doc):
+        """The EBX name of an exported document ('gameplay/complexobjects/plantteleporterexit')."""
+        found = self.archive.by_guid.get(doc.get('guid'))
+        return found[0].get('name', '') if found else ''
+
     def environment(self, environments):
         """Sun, sky and fog of the level's main visual environment (the highest priority one with an outdoor
         light), as plain values for the importer. Empty when the level has none."""
@@ -472,13 +482,34 @@ class Gw2Converter(Converter):
         gw1 = getattr(self.archive, 'inventory', {}).get('profile') == 'gw1'
         places = []
         starts = []
+        marker_prefabs = set()  # prefabs placed as one marker (tools/markers.py)
         roots = 0
         visited_layers = set()
         def visit(doc, obj, transform, source, stack, variation=0):
             if len(stack) > 64:
                 raise ValueError('GW2 prefab nesting exceeds limit')
             kind = obj.get('$type')
-            if obj.get('Excluded') or obj.get('Enabled') is False:
+            if obj.get('Excluded'):
+                return
+            if kind in SPAWNS:
+                # Game logic switches spawns on as the match goes, so a disabled one is still a marker.
+                local = obj.get('BlueprintTransform', obj.get('Transform'))
+                if local and marker_prefabs.intersection(stack):
+                    # Inside a purchase spot or teleporter: the spot is the marker, not each thing it can hold.
+                    if obj.get('Enabled') is not False:
+                        starts.append((transform @ matrix(local))[:3, 3])
+                elif local:
+                    world = transform @ matrix(local)
+                    blueprint = self.archive.resolve(doc, obj.get('Blueprint')) if obj.get('Blueprint', {}).get('$pointer') else None
+                    blueprint = self.document_name(blueprint[0]) if blueprint else None
+                    if kind == 'VehicleSpawnReferenceObjectData':
+                        self.markers.vehicle(obj, world, source, blueprint)
+                    else:
+                        self.markers.spawn(obj, world, source, blueprint)
+                        if obj.get('Enabled') is not False:
+                            starts.append(world[:3, 3])
+                return
+            if obj.get('Enabled') is False:
                 return
             if kind in ('ObjectReferenceObjectData', 'SpatialPrefabReferenceObjectData', 'SubWorldReferenceObjectData',
                         'ReferenceObjectData', 'SpatialReferenceObjectData', 'LogicPrefabReferenceObjectData',
@@ -495,6 +526,9 @@ class Gw2Converter(Converter):
                 if selected:
                     variation = selected[1].get('NameHash', variation)
                 local = matrix(obj['BlueprintTransform']) if 'BlueprintTransform' in obj else np.eye(4)
+                if kind != 'SubWorldReferenceObjectData' and \
+                        self.markers.prefab(self.document_name(target[0]), transform @ local, source):
+                    marker_prefabs.add(identity)
                 visit(*target, transform @ local, source, stack + [identity], variation)
             elif kind == 'ObjectBlueprint':
                 target = self.archive.resolve(doc, obj.get('Object'))
@@ -654,10 +688,6 @@ class Gw2Converter(Converter):
                                                                    'profile': 'gw2', 'collision_source': 'render_mesh'},
                                    'values': {'collision': 1}})
                     self.collision_geometry.append((path, world))
-            elif kind in ('PVZCharacterSpawnReferenceObjectData','AlternateSpawnEntityData'):
-                local = obj.get('BlueprintTransform',obj.get('Transform'))
-                if local:
-                    starts.append((transform @ matrix(local))[:3,3])
             elif kind in ('VisualEnvironmentReferenceObjectData', 'LogicVisualEnvironmentReferenceObjectData'):
                 # The level's sun, sky and fog. The chosen map's sub-worlds reference its own (day or night).
                 target = self.archive.resolve(doc, obj.get('Blueprint'))
@@ -715,12 +745,14 @@ class Gw2Converter(Converter):
         places.insert(0, {'kind': 'frostbite_environment', 'name': 'GW2 outdoor settings', 'at': [0, 0, 0],
                           'values': outdoor, 'tags': {}})
         places.insert(0, {'kind': 'spawn', 'name': 'GW2 editor spawn', 'at': spawn, 'values': {}, 'tags': {}})
+        places += self.markers.places
         report = {'profile': 'gw2', 'map': map_name, 'layers': roots, 'placements': len(places),
                   'meshes': len(self.meshes), 'materials': len(self.materials), 'textures': len(self.texture_paths),
                   'counts': self.counts, 'errors': self.errors, 'skipped_entities': self.skipped,
                   'skipped_skinned_meshes': self.skipped_meshes,
                   'skinned_objects': self.map_rigs.report(),
                   'terrain_tiles': self.terrain_tiles,
+                  'markers': self.markers.counts,
                   'grouped_instances': self.grouped_instances,
                   'unplaced_group_instances': self.unplaced_group_instances,
                   'archive_errors': self.archive.inventory['errors'],
@@ -729,7 +761,8 @@ class Gw2Converter(Converter):
                                   'Collision is generated from render triangles, not native Havok physics.',
                                   'Terrain heightfields are translated; native terrain splat layers, holes and scatter vegetation are not yet translated.',
                                   'Water exports a bounded plane and native shader sidecars; Blender approximates the surface without game wave simulation.',
-                                  'Skinned map objects are rigged and loop their default clip; characters and original gameplay are not translated.']}
+                                  'Skinned map objects are rigged and loop their default clip; characters and original gameplay are not translated.',
+                                  'Gameplay markers cover spawns, teleporters, purchase spots and vehicles; capture points and bomb sites are placed by game logic at run time and are left out.']}
         return {'format': 'aura-frostbite-scene', 'version': 1, 'name': 'GW2_' + map_name, 'places': places}, report
 
 

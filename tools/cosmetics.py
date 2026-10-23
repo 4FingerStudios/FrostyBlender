@@ -201,6 +201,15 @@ def _asset_items(items):
     return [i for i in items if i.get('asset') and i.get('bundle', '').lower().startswith('asset:')]
 
 
+def _with_asset(item):
+    """An 'asset:<mesh>' bundle is the mesh's own name; the add-on's item lists keep only name, slot, bundle
+    and sb, so the 'asset' field is filled back in from it."""
+    bundle = item.get('bundle', '')
+    if not item.get('asset') and bundle.lower().startswith('asset:'):
+        item = dict(item, asset=bundle[len('asset:'):])
+    return item
+
+
 def bfn_skeletons(game, characters):
     """Names of the Battle for Neighborville characters' SkeletonAssets, from the bundle manifests."""
     import bfn
@@ -566,6 +575,7 @@ def gw_export(game, kind, items, output):
 
 
 def export(game, items, output, names=None):
+    items = [_with_asset(i) for i in items]
     kind = game_kind(game)
     meshes = [i for i in items if not clip_item(i)]
     if len(meshes) < len(items):  # emotes are decoded from the animation banks at conversion

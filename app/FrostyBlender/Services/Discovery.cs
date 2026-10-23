@@ -27,8 +27,14 @@ public sealed class Discovery
         _ => throw new ArgumentOutOfRangeException(nameof(section)),
     };
 
-    private string CacheFile(Section section, string game) =>
-        Path.Combine(BlenderLink.Folder, "cache", $"{game}_{section}_{_link.Info?.AddonVersion}.json".ToLowerInvariant());
+    // The game folder is part of the name: two installs of one game (Steam and a console build, say) keep
+    // separate lists, and pointing the add-on at another folder never shows the old folder's list.
+    private string CacheFile(Section section, string game, string folder) =>
+        Path.Combine(BlenderLink.Folder, "cache", $"{game}_{section}_{_link.Info?.AddonVersion}_{FolderKey(folder)}.json".ToLowerInvariant());
+
+    private static string FolderKey(string folder) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(folder).TrimEnd('\\', '/').ToLowerInvariant())))[..8];
 
     public async Task<JsonObject> Scan(Section section, string game, bool refresh)
     {
@@ -38,7 +44,7 @@ public sealed class Discovery
         if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
             throw new InvalidOperationException(
                 $"The {game} folder isn't set. Set it in Blender: Edit > Preferences > Add-ons > Frostbite Map Importer.");
-        var cache = CacheFile(section, game);
+        var cache = CacheFile(section, game, folder);
         if (!refresh && File.Exists(cache))
         {
             try { return JsonNode.Parse(await File.ReadAllTextAsync(cache))!.AsObject(); }

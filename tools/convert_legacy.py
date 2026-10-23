@@ -11,6 +11,7 @@ import bfn_terrain
 import bfn_decals
 import bfn_map_effects
 import bfn_water
+import markers
 
 MESHSET_TYPE = 0x49B156D4
 # Section stride, vertex declaration offset and stream slots of each game's MeshSet sections.
@@ -44,7 +45,47 @@ def cstring(data, at):
     return data[at:data.index(b'\0', at)].decode('utf8', 'replace')
 
 
-def mesh_sections(data, geometry_of, game, skinned=False):
+def _inline_sections(data, lod, game, skinned):
+    """Small meshes (projectiles, pickups) have no geometry chunk: every LOD's vertex and index buffers sit in
+    one block inside the MeshSet near its end, each LOD at its offset into the block (after its chunk GUID),
+    LOD0 first. The block starts on a 16-byte boundary (a few bytes may follow it). Each such start is tried;
+    the one whose vertices stay inside the MeshSet's bounding box, with the fewest collapsed triangles, wins
+    (vertex-aligned misreads also give clean triangles, but scattered far outside the box)."""
+    import numpy as np
+    low, high = np.array(struct.unpack_from('<3f', data, 0)), np.array(struct.unpack_from('<3f', data, 16))
+    slack = 1e-3 + 1e-3 * float(np.linalg.norm(high - low))
+    size = 0
+    for at in struct.unpack_from('<6Q', data, 0x20):
+        if at and at + 0x74 <= len(data):
+            index_size, vertex_size = struct.unpack_from('<II', data, at + 0x58)
+            size = max(size, struct.unpack_from('<I', data, at + 0x70)[0] + index_size + vertex_size)
+    if not 0 < size <= len(data) - lod:
+        raise ValueError('Inline mesh geometry out of range')
+    best = None
+    last = len(data) - size
+    for start in range(last - last % 16, lod, -16):
+        try:
+            found = mesh_sections(data, lambda guid, start=start: data[start:], game, skinned, _inline=True)
+        except (ValueError, IndexError, struct.error):
+            continue
+        if not found:
+            continue
+        outside = flat = 0
+        for s in found:
+            p, tri = s['positions'], s['indices'].reshape(-1, 3)
+            outside += int((((p < low - slack) | (p > high + slack)).any(axis=1)).sum())
+            area = np.linalg.norm(np.cross(p[tri[:, 1]] - p[tri[:, 0]], p[tri[:, 2]] - p[tri[:, 0]]), axis=1)
+            flat += int((area < 1e-9).sum())
+        if best is None or (outside, flat) < best[0]:
+            best = ((outside, flat), found)
+        if outside == flat == 0:
+            break
+    if best is None:
+        raise ValueError('Inline mesh geometry not found')
+    return best[1]
+
+
+def mesh_sections(data, geometry_of, game, skinned=False, _inline=False):
     """Drawable LOD0 sections of a Garden Warfare 2 or Battle for Neighborville MeshSet. With
     skinned=True, Battle for Neighborville sections also carry a 'skin' of skeleton bone ids and
     weights; their vertices hold bone ids directly."""
@@ -55,6 +96,8 @@ def mesh_sections(data, geometry_of, game, skinned=False):
     index_format, index_size, vertex_size = struct.unpack_from('<III', data, lod + 0x54)
     if count > 512 or table + count * stride > len(data): raise ValueError('MeshSet section table out of range')
     guid = data[lod + 0x60:lod + 0x70].hex()
+    if guid == '0' * 32 and not _inline and 0 < vertex_size + index_size <= len(data) - lod:
+        return _inline_sections(data, lod, game, skinned)
     geometry = geometry_of(guid)
     if geometry is None: raise ValueError('Geometry chunk missing: ' + guid)
     if len(geometry) < vertex_size + index_size: raise ValueError('Geometry chunk too short')
@@ -483,8 +526,69 @@ class LegacyConverter:
         self.counts['crop_bounds'] = [round(v, 1) for v in box]
         return kept
 
+    # ---- gameplay markers ----
+    def gameplay_markers(self, kept):
+        """Battle for Neighborville spawns, teleporters and purchase spots from the game-mode sub-worlds and
+        layers, which hold no map geometry and so are not walked (tools/markers.py). A marker needs ground
+        just below it: game modes park some of their props in the air until their logic moves them."""
+        marks = markers.Markers(self.game)
+        for name, (asset, doc) in self.by_name.items():
+            leaf = name.split('/')[-1]
+            if not markers.BFN_MODE_LAYER.match(leaf) or not doc['objects']: continue
+            mode = markers.bfn_mode(leaf)
+            if asset.get('root_type') == 'LayerData':
+                for obj in doc['objects']:
+                    if obj.get('$type') == 'AlternateSpawnEntityData':
+                        marks.spawn(obj, transform(obj.get('Transform', {})), leaf, team=markers.bfn_team(leaf), mode=mode)
+            elif asset.get('root_type') == 'SubWorldData':
+                self.marker_walk(marks, doc, doc['objects'][0], np.eye(4), leaf, mode, (), False)
+
+        def grounded(x, y, z):
+            if not kept(x, z): return False
+            floor = self.floor_at(x, z, below=y + 1.0)
+            return floor is not None and y - floor < 4.0
+        marks.keep(grounded)
+        self.counts['markers'] = marks.counts
+        return marks.places
+
+    def document_name(self, doc):
+        found = self.archive.by_guid.get(doc['guid'])
+        return found[0].get('name', '') if found else ''
+
+    def marker_walk(self, marks, doc, obj, matrix, leaf, mode, stack, inside):
+        """Spawn references and marker prefabs under a game-mode sub-world. inside: under a marker prefab,
+        whose spawns are what the spot can hold rather than markers of their own."""
+        if obj is None or len(stack) > 32: return
+        kind = obj.get('$type', '')
+        key = (doc['guid'], obj.get('$guid') or id(obj))
+        if key in stack: return
+        stack = stack + (key,)
+        if kind == 'PVZCharacterSpawnReferenceObjectData':
+            if inside: return
+            child = self.resolve(doc, obj.get('Blueprint'))
+            marks.spawn(obj, matrix @ transform(obj.get('BlueprintTransform', {})), leaf,
+                        blueprint=self.document_name(child[0]) if child else None, mode=mode)
+        elif kind == 'LayerReferenceObjectData':
+            return  # layers are read on their own, with their team
+        elif kind.endswith('ReferenceObjectData'):
+            if obj.get('Excluded'): return
+            child = self.resolve(doc, obj.get('Blueprint'))
+            if not child: return
+            local = matrix @ transform(obj.get('BlueprintTransform', {}))
+            if kind != 'SubWorldReferenceObjectData' and not inside:
+                inside = marks.prefab(self.document_name(child[0]), local, leaf, mode)
+            self.marker_walk(marks, child[0], child[1], local, leaf, mode, stack, inside)
+        elif kind == 'ObjectBlueprint':
+            child = self.resolve(doc, obj.get('Object'))
+            if child: self.marker_walk(marks, child[0], child[1], matrix, leaf, mode, stack, inside)
+        else:
+            for ref in obj.get('Objects', []) or []:
+                child = self.resolve(doc, ref)
+                if child: self.marker_walk(marks, child[0], child[1], matrix, leaf, mode, stack, inside)
+
     # ---- spawn ----
-    def floor_at(self, x, z):
+    def floor_at(self, x, z, below=None):
+        """The highest up-facing surface at x, z (with below, the highest no higher than that)."""
         best = None
         for rid, matrix in self.floor:
             rel, mats, positions, triangles = self.meshes[rid]
@@ -505,6 +609,9 @@ class LegacyConverter:
             w = 1 - u - v; inside = (u >= 0) & (v >= 0) & (w >= 0)
             if not inside.any(): continue
             y = (u * a[:, 1] + v * b[:, 1] + w * c[:, 1])[inside]
+            if below is not None:
+                y = y[y <= below]
+                if not len(y): continue
             # A walkable floor: the highest surface facing up.
             top = float(y.max())
             best = top if best is None else max(best, top)
@@ -540,6 +647,7 @@ class LegacyConverter:
             places += bfn_water.sea(self, self.water_entities, places, box)
             places += self.decals.build(places, kept)
             places += self.effects.build(kept)
+            places += self.gameplay_markers(kept)
             self.counts.update(self.decals.counts)
             self.counts.update(self.effects.counts)
             self.counts['water_surfaces'] = sum(p.get('tags', {}).get('surface') == 'water' for p in places)
@@ -549,10 +657,11 @@ class LegacyConverter:
         places.insert(0, {'kind': 'spawn', 'name': title + ' editor spawn', 'at': spawn.tolist(), 'tags': {}, 'values': {}})
         report = {'map': root_name, 'game': self.game, 'placements': len(places), 'meshes': len(self.meshes), 'materials': len(self.materials),
                   'textures': len(self.texture_paths), 'counts': self.counts, 'errors': self.errors,
-                  'limitations': (['Static meshes, terrain heightfields, water surfaces, decal volumes and ambient effects; gameplay entities are not converted.',
+                  'limitations': (['Static meshes, terrain heightfields, water surfaces, decal volumes and ambient effects; gameplay logic is not converted.',
                                    'Water uses the authored water meshes with an animated Blender water shader; depth colour, foam and flow are not executed.',
                                    'Decal volumes are projected onto the map triangles inside them and alpha blended; native decal masks are not executed.',
-                                   'Effects that gameplay starts (AutoStart off) are skipped; set AURA_BFN_MAP_EFFECTS=all to place them.']
+                                   'Effects that gameplay starts (AutoStart off) are skipped; set AURA_BFN_MAP_EFFECTS=all to place them.',
+                                   'Gameplay markers cover each mode\'s spawns, teleporters and purchase spots; objectives the modes move into place at run time are left out.']
                                   if self.game == 'bfn' else
                                   ['Static meshes and Battle for Neighborville terrain heightfields only: water, decals, effects and gameplay entities are not converted.']) + [
                                   'Terrain uses one authored grass surface; native terrain splat layers, holes and scatter meshes are not translated.',

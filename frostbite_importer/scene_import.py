@@ -23,6 +23,13 @@ from .materials import build_material
 
 AXIS = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], np.float32)
 AXIS4 = Matrix(((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (0, 0, 0, 1)))
+# Gameplay markers (tools/markers.py): collection names, and the empty's shape and size per kind.
+MARKER_GROUPS = {'player_spawn': 'Player spawns', 'ai_spawn': 'AI spawns', 'vehicle_spawn': 'Vehicle spawns',
+                 'teleporter': 'Teleporters', 'purchase': 'Purchase spots', 'objective': 'Objectives',
+                 'collectible': 'Collectibles'}
+MARKER_SHAPES = {'player_spawn': ('SINGLE_ARROW', 2.0), 'ai_spawn': ('SPHERE', 0.6), 'vehicle_spawn': ('CONE', 1.5),
+                 'teleporter': ('CIRCLE', 1.5), 'purchase': ('CUBE', 0.6), 'objective': ('CIRCLE', 6.0),
+                 'collectible': ('SPHERE', 0.4)}
 # Frostbite bones run along their local X; Blender bones along local Y. Columns: the Blender
 # bone's X, Y and Z axes in Frostbite bone space.
 BONE_AXES = Matrix(((0, 1, 0, 0), (1, 0, 0, 0), (0, 0, -1, 0), (0, 0, 0, 1)))
@@ -54,10 +61,12 @@ def bone_names(bones):
 
 class Importer:
     def __init__(self, scene_path, assets, include_collision=False, group_by_level=True,
-                 add_lighting=True, report=print, rig=True):
+                 add_lighting=True, report=print, rig=True, include_markers=True):
         self.scene_path = Path(scene_path)
         self.assets = Path(assets)
         self.include_collision = include_collision
+        self.include_markers = include_markers
+        self.marker_root, self.marker_groups = None, {}
         self.group_by_level = group_by_level
         self.add_lighting = add_lighting
         self.report = report
@@ -408,6 +417,8 @@ class Importer:
                     x, y, z = place['at']
                     ob.location = (x, -z, y)
                     root.objects.link(ob)
+                elif kind == 'frostbite_marker' and self.include_markers:
+                    self.marker(place, root)
                 elif kind == 'frostbite_effect':
                     from . import effects_build
                     try:
@@ -433,6 +444,28 @@ class Importer:
         for warning in self.warnings[:200]:
             print('Frostbite import:', warning)
         return root
+
+    def marker(self, place, root):
+        """A gameplay marker (tools/markers.py) as a labelled empty, one collection per kind, not rendered."""
+        tags = place.get('tags', {})
+        category = tags.get('category', 'marker')
+        if self.marker_root is None:
+            self.marker_root = bpy.data.collections.new(root.name + ' gameplay')
+            root.children.link(self.marker_root)
+            self.marker_root.hide_render = True
+        group = self.marker_groups.get(category)
+        if group is None:
+            group = bpy.data.collections.new(MARKER_GROUPS.get(category, category.replace('_', ' ').title()))
+            self.marker_root.children.link(group)
+            self.marker_groups[category] = group
+        ob = bpy.data.objects.new(place.get('name', 'marker')[:60], None)
+        ob.empty_display_type, ob.empty_display_size = MARKER_SHAPES.get(category, ('PLAIN_AXES', 1.0))
+        ob.matrix_world = AXIS4 @ Matrix(place['matrix']) @ AXIS4.inverted()
+        ob.show_name = category != 'ai_spawn'  # AI spawns come in the hundreds
+        for key in ('team', 'layer', 'blueprint'):
+            if tags.get(key):
+                ob['frostbite_' + key] = tags[key]
+        group.objects.link(ob)
 
     def environment(self, context, root, values):
         """The level's sun, sky and fog. GW1/GW2 maps carry the game's own values (see gw2_convert.environment);

@@ -232,6 +232,9 @@ class FrostbiteState(bpy.types.PropertyGroup):
                        description='Keep raw archive exports and decoded textures (several GB) for debugging')
     include_collision: BoolProperty(name='Collision objects', default=False,
                                     description='Also import the collision copies as hidden wireframes')
+    include_markers: BoolProperty(name='Gameplay markers', default=True,
+                                  description='Spawns, teleporters, purchase spots and vehicles as labelled empties '
+                                              '(a collection that does not render)')
     group_by_level: BoolProperty(name='Group by sub-level', default=True,
                                  description='One collection per streamed sub-level (layers you can hide)')
     status: StringProperty()
@@ -245,6 +248,7 @@ def import_scene(context, scene_path, assets=None, state=None):
         scene_path, assets,
         include_collision=state.include_collision if state else False,
         group_by_level=state.group_by_level if state else True,
+        include_markers=state.include_markers if state else True,
         report=lambda level, text: print('Frostbite import:', text))
     importer.run(context)
     return importer
@@ -479,6 +483,7 @@ class FROSTBITE_OT_import_scene(bpy.types.Operator, ImportHelper):
     assets: StringProperty(name='Assets folder', subtype='DIR_PATH',
                            description='Leave empty to find it next to the scene or in the Aura project')
     include_collision: BoolProperty(name='Collision objects', default=False)
+    include_markers: BoolProperty(name='Gameplay markers', default=True)
     group_by_level: BoolProperty(name='Group by sub-level', default=True)
 
     def execute(self, context):
@@ -488,7 +493,8 @@ class FROSTBITE_OT_import_scene(bpy.types.Operator, ImportHelper):
             return {'CANCELLED'}
         try:
             importer = scene_import.Importer(self.filepath, assets, self.include_collision,
-                                             self.group_by_level, report=self.report)
+                                             self.group_by_level, report=self.report,
+                                             include_markers=self.include_markers)
             importer.run(context)
         except (OSError, ValueError, KeyError) as error:
             self.report({'ERROR'}, str(error))
@@ -529,6 +535,7 @@ class FROSTBITE_PT_panel(bpy.types.Panel):
         col.prop(state, 'game_shaders')
         col.prop(state, 'group_by_level')
         col.prop(state, 'include_collision')
+        col.prop(state, 'include_markers')
         col.prop(state, 'keep')
         row = layout.row(align=True)
         row.scale_y = 1.4
