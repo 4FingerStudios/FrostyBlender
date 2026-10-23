@@ -28,14 +28,19 @@ GAMES = {'gw1_path': 'PVZ.Main_Win64_Retail.exe', 'gw2_path': 'GW2.Main_Win64_Re
 
 def game_ok(folder, exe):
     """The game folder holds the game's executable, or for GW1 an Xbox 360 disc copy (Default.xex beside
-    Data/Xenon) on its own or in a folder with its title update and DLC packs (tools/gw1_x360.py)."""
+    Data/Xenon) on its own or in a folder with its title update and DLC packs, or is one of those pack folders
+    (the tools then read the folder holding them all; tools/gw1_x360.py)."""
     if not folder:
         return False
     folder = Path(bpy.path.abspath(folder))
     if (folder / exe).is_file():
         return True
-    return exe == GAMES['gw1_path'] and any((disc / 'Default.xex').is_file() and (disc / 'Data/Xenon').is_dir()
-                                            for disc in [folder] + list(folder.glob('*/')))
+    if exe != GAMES['gw1_path']:
+        return False
+    candidates = [folder] + list(folder.glob('*/'))
+    if (folder / 'Data/Xenon').is_dir() or any(folder.glob('*/Data/Xenon')):  # a pack folder: look beside it
+        candidates += [d for parent in list(folder.parents)[:2] for d in parent.glob('*/')]
+    return any((disc / 'Default.xex').is_file() and (disc / 'Data/Xenon').is_dir() for disc in candidates)
 
 
 def default_game(exe):

@@ -58,8 +58,21 @@ def layers(folder):
     return disc, packs
 
 
+def set_folder(folder):
+    """The folder to read for a chosen folder: itself, or for a title update or DLC pack folder chosen inside a
+    set (BBB/v1.1 - Garden Variety), the folder holding the disc and every pack (BBB)."""
+    folder = Path(os.path.abspath(folder))
+    if not folder.is_dir() or layers(folder)[0] is not None:
+        return folder
+    for parent in list(folder.parents)[:2]:
+        disc, packs = layers(parent)
+        if disc and any(l['data'].parent == folder or folder in l['data'].parents for l in packs):
+            return parent
+    return folder
+
+
 def is_x360(folder):
-    return layers(folder)[0] is not None
+    return layers(set_folder(folder))[0] is not None
 
 
 def is_view(game):
@@ -92,7 +105,7 @@ def _link(link, target):
 
 def view(folder):
     """The PC-layout view of an Xbox 360 GW1 folder (made or refreshed), for every tool to read."""
-    folder = Path(os.path.abspath(folder))
+    folder = set_folder(folder)
     disc, packs = layers(folder)
     if disc is None:
         raise ValueError('Not an Xbox 360 Garden Warfare folder: %s' % folder)
@@ -116,7 +129,7 @@ def view(folder):
 
 def game_root(game):
     """The folder the tools read for this game folder: its view when it is an Xbox 360 GW1 folder, else itself."""
-    return view(game) if not is_view(game) and is_x360(game) else Path(game)
+    return view(set_folder(game)) if not is_view(game) and is_x360(game) else Path(game)
 
 
 def source(game):
