@@ -7,6 +7,7 @@ import numpy as np
 from convert import Archive, Converter, matrix, read_attr, write_mesh, write_skin, skin_attrs
 from gw2_terrain import terrain_tree, tile_heights, height_section
 from gw2_groups import group_instances, gw1_part_poses
+import environment
 
 
 SPAWNS = ('PVZCharacterSpawnReferenceObjectData', 'AlternateSpawnEntityData', 'VehicleSpawnReferenceObjectData')
@@ -420,62 +421,12 @@ class Gw2Converter(Converter):
         return found[0].get('name', '') if found else ''
 
     def environment(self, environments):
-        """Sun, sky and fog of the level's main visual environment (the highest priority one with an outdoor
-        light), as plain values for the importer. Empty when the level has none."""
-        def components(target):
-            doc, blueprint = target
-            entity = self.archive.resolve(doc, blueprint.get('Object'))
-            if not entity:
-                return {}
-            found = {}
-            for ref in entity[1].get('Components', []):
-                part = self.archive.resolve(entity[0], ref)
-                if part and not part[1].get('Excluded'):
-                    found[part[1]['$type']] = part
-            return found
-        # The map's main environment has a sky; smaller ones (VisEnv_..._MiningArea) only nudge the light
-        # inside an area, so they lose to it whatever their priority.
-        best = None
-        for priority, source, target in sorted(environments, key=lambda e: -e[0]):
-            parts = components(target)
-            if 'OutdoorLightComponentData' not in parts:
-                continue
-            rank = ('SkyComponentData' in parts, 'FogComponentData' in parts, priority)
-            if best is None or rank > best[0]:
-                best = (rank, target, parts)
-        if best is None:
-            return {}
-        best = best[1:]
-        if best is None:
-            return {}
-        target, parts = best
-        def vec(value):
-            return [float(value.get(axis, 0.0)) for axis in 'xyz'] if isinstance(value, dict) else None
-        light = parts['OutdoorLightComponentData'][1]
-        out = {'environment': target[1].get('Name', ''),
-               'sun_color': vec(light.get('SunColor')), 'sky_color': vec(light.get('SkyColor')),
-               'ground_color': vec(light.get('GroundColor')),
-               'sun_rotation': [float(light.get('SunRotationX', 0.0)), float(light.get('SunRotationY', 45.0))]}
-        if 'SkyComponentData' in parts:
-            sdoc, sky = parts['SkyComponentData']
-            out['sky_brightness'] = float(sky.get('BrightnessScale', 1.0))
-            texture = self.archive.resolve(sdoc, sky.get('PanoramicTexture'))
-            path = self.texture(texture[0]['guid']) if texture else None
-            if path:
-                out['sky_texture'] = path
-                out['sky_uv'] = [float(sky.get(k, d)) for k, d in (('PanoramicUVMinX', 0.0), ('PanoramicUVMaxX', 1.0),
-                                                                   ('PanoramicUVMinY', 0.0), ('PanoramicUVMaxY', 1.0))]
-                out['sky_rotation'] = float(sky.get('PanoramicRotation', 0.0))
-                out['sky_tile'] = float(sky.get('PanoramicTileFactor', 1.0))
-        if 'FogComponentData' in parts:
-            fog = parts['FogComponentData'][1]
-            out['fog_color'] = vec(fog.get('FogColor'))
-            out['fog_start'] = float(fog.get('Start', 0.0))
-            out['fog_end'] = float(fog.get('End', 0.0))
-            curve = fog.get('Curve')
-            if isinstance(curve, dict):
-                out['fog_curve'] = [float(curve.get(axis, 0.0)) for axis in 'xyzw']
-        return {k: v for k, v in out.items() if v is not None}
+        """Sun, sky and fog of the level's main visual environment (tools/environment.py). Empty when the
+        level has none."""
+        def sky_texture(doc, ref):
+            texture = self.archive.resolve(doc, ref)
+            return self.texture(texture[0]['guid']) if texture else None
+        return environment.pick(environments, self.archive.resolve, sky_texture)
 
     def scene(self, map_name, choice=''):
         """choice picks one map of a level and its time of day ('1', 'night', '1-night'; see variants.py)."""

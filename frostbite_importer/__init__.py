@@ -580,6 +580,11 @@ classes = (FrostbitePreferences, FrostbiteMap, FrostbiteState, FROSTBITE_OT_buil
 # The Customizations tab uses the helpers above, so it is imported after them.
 from . import animation_import, animations_ui, app_link, cosmetics_ui, effects_ui, npcs_ui, props_ui, rig_tools  # noqa: E402
 
+try:  # Export for Unreal is dev only: release builds leave its files out (build.py --dev keeps them)
+    from . import unreal_export  # noqa: E402
+except ImportError:
+    unreal_export = None
+
 
 def _apply_link(restart=False):
     """Start or stop the app link to match the preferences."""
@@ -600,6 +605,8 @@ def register():
     bpy.types.Scene.frostbite = bpy.props.PointerProperty(type=FrostbiteState)
     bpy.types.TOPBAR_MT_file_import.append(menu_import)
     cosmetics_ui.register()
+    if unreal_export:
+        unreal_export.register()
     npcs_ui.register()
     props_ui.register()
     effects_ui.register()
@@ -615,6 +622,8 @@ def unregister():
     effects_ui.unregister()
     props_ui.unregister()
     npcs_ui.unregister()
+    if unreal_export:
+        unreal_export.unregister()
     cosmetics_ui.unregister()
     bpy.types.TOPBAR_MT_file_import.remove(menu_import)
     del bpy.types.Scene.frostbite

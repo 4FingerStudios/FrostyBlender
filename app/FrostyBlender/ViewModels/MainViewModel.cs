@@ -30,6 +30,9 @@ public partial class MainViewModel : ObservableObject
     private System.Threading.CancellationTokenSource? _signIn;
 
     private readonly BlenderLink _link = new();
+#if UNREAL
+    private readonly UnrealLink _unreal = new();
+#endif
     private readonly Discovery _discovery;
     private readonly Icons _icons;
     private readonly DispatcherTimer _timer;
@@ -96,6 +99,8 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _linkLoaded;
     [ObservableProperty] private bool _connected;
     [ObservableProperty] private string _blenderStatus = "Looking for Blender…";
+    [ObservableProperty] private bool _unrealConnected;
+    [ObservableProperty] private string _unrealStatus = "Unreal isn't open";
     [ObservableProperty] private string _jobStatus = "";
     [ObservableProperty] private bool _sending;
     [ObservableProperty] private string _textureSize = "1024";
@@ -152,6 +157,13 @@ public partial class MainViewModel : ObservableObject
         Section.Animations => Ticked > 0 ? $"Send {Ticked} clip{(Ticked == 1 ? "" : "s")} to Blender" : "Send clip to Blender",
         _ => Ticked > 0 ? $"Send {Ticked} item{(Ticked == 1 ? "" : "s")} to Blender" : "Send to Blender",
     };
+    /// <summary>Maps, characters, NPCs and props can go on to Unreal; effects and clips don't export as meshes.</summary>
+    public bool CanSendUnreal => UnrealEnabled && Section is Section.Maps or Section.Characters or Section.Npcs or Section.Props;
+#if UNREAL
+    public bool UnrealEnabled => true;
+#else
+    public bool UnrealEnabled => false;  // Unreal is in dev builds only (build.py --dev)
+#endif
     public string ItemsHeader => Section switch
     {
         Section.Props => "PROPS",
@@ -280,7 +292,7 @@ public partial class MainViewModel : ObservableObject
     {
         foreach (var name in new[] { nameof(Section), nameof(IsBrowser), nameof(IsExplorer), nameof(IsSettings), nameof(HasItems),
                      nameof(IsCharacterLike), nameof(IsNpcs), nameof(ShowCursorOption), nameof(IsAnimations), nameof(SectionTitle), nameof(SectionBlurb),
-                     nameof(SendText), nameof(ItemsHeader), nameof(Hint) })
+                     nameof(SendText), nameof(ItemsHeader), nameof(Hint), nameof(CanSendUnreal) })
             OnPropertyChanged(name);
         if (IsBrowser) _ = Scan(false);
         if (IsExplorer) _ = LoadExplorer(false);
@@ -550,7 +562,21 @@ public partial class MainViewModel : ObservableObject
 
     // ------------------------------------------------------------ sending
     [RelayCommand]
-    private async Task Send()
+    private Task Send() => SendTo(false);
+
+    /// <summary>Import in Blender, then Blender exports what it added and sends it to the open Unreal Editor.</summary>
+    [RelayCommand]
+    private Task SendUnreal()
+    {
+        if (!UnrealConnected)
+        {
+            JobStatus = "Open your Unreal project with the FrostyBlender plugin first (Settings › Unreal link).";
+            return Task.CompletedTask;
+        }
+        return SendTo(true);
+    }
+
+    private async Task SendTo(bool unreal)
     {
         if (SelectedEntry == null || Sending) return;
         var entry = SelectedEntry;
@@ -562,6 +588,7 @@ public partial class MainViewModel : ObservableObject
         }
         var options = new JsonObject { ["texture_size"] = TextureSize, ["rig"] = Rig, ["spawn_at_cursor"] = SpawnAtCursor, ["set_fps"] = SetFps, ["game_shaders"] = GameShaders, ["pro_rig"] = Rig && ProRig };
         if (Section == Section.Animations && Armature != ActiveArmature) options["armature"] = Armature;
+        if (unreal) options["unreal"] = true;
         var kind = Section switch
         {
             Section.Maps => "maps", Section.Characters => "cosmetics", Section.Npcs => "npcs",
@@ -609,7 +636,7 @@ public partial class MainViewModel : ObservableObject
         {
             _job = await _link.Import(body);
             _jobKind = kind;
-            JobStatus = $"Sent {entry.Title} to Blender…";
+            JobStatus = unreal ? $"Sent {entry.Title} to Blender, then on to Unreal…" : $"Sent {entry.Title} to Blender…";
         }
         catch (Exception error)
         {
@@ -722,6 +749,15 @@ public partial class MainViewModel : ObservableObject
                 _ = LoadItemIcons(Game, selected);
             }
         }
+#if UNREAL
+        var unreal = await _unreal.Ping();
+#else
+        JsonObject? unreal = null;
+#endif
+        UnrealConnected = unreal != null;
+        UnrealStatus = unreal == null ? "Unreal isn't open"
+            : unreal["busy"]?.GetValue<bool>() == true ? "Unreal is importing…"
+            : $"Unreal {Str(unreal, "engine").Split('-')[0]} · {Str(unreal, "project")} connected";
         var ping = await _link.Get("/ping");
         RefreshAddonConnection(ping);
         Connected = ping != null;

@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "frostbite_importer"
-version = "1.16.1"
+version = "1.17.0"
 name = "Frostbite Map Importer"
 tagline = "Import Garden Warfare 1 & 2, Neighborville and Skate maps"
 maintainer = "4FingerStudios"

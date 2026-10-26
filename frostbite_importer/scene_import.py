@@ -33,6 +33,17 @@ MARKER_SHAPES = {'player_spawn': ('SINGLE_ARROW', 2.0), 'ai_spawn': ('SPHERE', 0
 # Frostbite bones run along their local X; Blender bones along local Y. Columns: the Blender
 # bone's X, Y and Z axes in Frostbite bone space.
 BONE_AXES = Matrix(((0, 1, 0, 0), (1, 0, 0, 0), (0, 0, -1, 0), (0, 0, 0, 1)))
+# Strength of Blender's sky texture standing in for Battle for Neighborville's physical sky, beside the
+# scene's 2 W/m2 sun (tools/environment.py scales the game's lights the same way).
+PHYSICAL_SKY_STRENGTH = 0.25
+
+
+def _to_sun(values):
+    """Blender-space direction toward the game's sun: Frostbite gives its azimuth and elevation, Y up."""
+    azimuth, elevation = (math.radians(a) for a in values.get('sun_rotation', (0.0, 45.0)))
+    to_sun = Vector((math.cos(elevation) * math.sin(azimuth), math.sin(elevation),
+                     math.cos(elevation) * math.cos(azimuth)))
+    return Vector((to_sun.x, -to_sun.z, to_sun.y))
 
 
 def find_assets(scene_path):
@@ -478,12 +489,7 @@ class Importer:
             peak = max(color)
             sun.color = [c / peak for c in color]
             sun.energy = min(max(peak * 2.0, 0.05), 10.0)
-            azimuth, elevation = (math.radians(a) for a in values.get('sun_rotation', (0.0, 45.0)))
-            # Frostbite's sun sits at this azimuth and elevation (Y up); the light travels away from it.
-            to_sun = Vector((math.cos(elevation) * math.sin(azimuth), math.sin(elevation),
-                             math.cos(elevation) * math.cos(azimuth)))
-            travel = -Vector((to_sun.x, -to_sun.z, to_sun.y))
-            ob.rotation_euler = travel.to_track_quat('-Z', 'Y').to_euler()
+            ob.rotation_euler = (-_to_sun(values)).to_track_quat('-Z', 'Y').to_euler()
         else:
             sun.energy = float(values.get('sun_intensity', 2.4)) * 1.5
             ob.rotation_euler = (0.85, 0.0, 0.6)
@@ -540,6 +546,7 @@ class Importer:
         link(ambient.outputs['Result'], light_bg.inputs['Color'])
         light_bg.inputs['Strength'].default_value = 3.0  # the game's ambient values are small and scene-referred
         seen = light_bg
+        camera_bg = None
         path = values.get('sky_texture')
         if path and (self.assets / path).is_file():
             # The panorama wraps around by azimuth. Its UV range says which band of the sky dome it covers, with
@@ -566,6 +573,21 @@ class Importer:
             camera_bg = node('ShaderNodeBackground', 300, -200)
             link(image.outputs['Color'], camera_bg.inputs['Color'])
             camera_bg.inputs['Strength'].default_value = float(values.get('sky_brightness', 1.0))
+        elif values.get('sun_lux') and values.get('sun_color'):
+            # Battle for Neighborville draws a physically based sky, not a panorama: Blender's own sky texture
+            # with the game's sun stands in for it where the camera looks.
+            to_sun = _to_sun(values)
+            sky = node('ShaderNodeTexSky', 0, -200)
+            sky.sky_type = next(i.identifier for i in sky.bl_rna.properties['sky_type'].enum_items)
+            if hasattr(sky, 'sun_elevation'):
+                sky.sun_elevation = math.asin(max(min(to_sun.z, 1.0), -1.0))
+                sky.sun_rotation = math.atan2(-to_sun.x, to_sun.y)  # Cycles: rotation 0 puts the sun along +Y
+            if hasattr(sky, 'sun_disc'):
+                sky.sun_disc = False  # the sun lamp already lights the scene
+            camera_bg = node('ShaderNodeBackground', 300, -200)
+            link(sky.outputs['Color'], camera_bg.inputs['Color'])
+            camera_bg.inputs['Strength'].default_value = PHYSICAL_SKY_STRENGTH
+        if camera_bg is not None:
             ray = node('ShaderNodeLightPath', 300, 300)
             pick = node('ShaderNodeMixShader', 550, 0)
             link(ray.outputs['Is Camera Ray'], pick.inputs['Fac'])
@@ -578,6 +600,10 @@ class Importer:
         if values.get('fog_color') and end > start >= 0:
             curve = values.get('fog_curve')
             peak = min(max(sum(curve) if curve else 0.8, 0.05), 0.95)
+            if values.get('sun_lux'):
+                # Battle for Neighborville's fog is physical scattering that tints rather than whites out (its
+                # colour is plain white); at full strength it would bury the sky.
+                peak = min(peak, 0.3)
             try:
                 self.fog(context, world, values['fog_color'], start, end, peak)
             except (AttributeError, RuntimeError, KeyError, TypeError) as error:
@@ -621,13 +647,24 @@ class Importer:
         scene['frostbite_fog'] = 'Compositor: %s, fog %.0f-%.0f m' % (tree.name, start, end)
 
     def light(self, place, root):
-        """A game point or spot light. Strength is the game's intensity in watts-ish units, reach is its radius."""
+        """A game point, spot or rectangle light. GW1/GW2 strength is the game's intensity in watts-ish units;
+        Battle for Neighborville lights come in watts already, scaled with the sun (tools/environment.py).
+        Reach is the light's radius."""
         values = place.get('values', {})
-        kind = 'SPOT' if values.get('type') == 'SPOT' else 'POINT'
+        kind = values.get('type') if values.get('type') in ('SPOT', 'AREA') else 'POINT'
         light = bpy.data.lights.new(place.get('name', 'Frostbite light'), kind)
         light.color = values.get('color', (1.0, 1.0, 1.0))
-        light.energy = min(float(values.get('intensity', 10.0)) * 10.0, 100000.0)
-        light.shadow_soft_size = max(float(values.get('size', 0.0)) * 0.5, 0.05)
+        if 'watts' in values:
+            light.energy = min(float(values['watts']), 1000000.0)
+            # Hundreds of faint lamps would overflow EEVEE's shadow pool; only lights that matter cast shadows.
+            light.use_shadow = light.energy >= 1.0
+        else:
+            light.energy = min(float(values.get('intensity', 10.0)) * 10.0, 100000.0)
+        if kind == 'AREA':
+            light.shape = 'RECTANGLE'
+            light.size, light.size_y = max(float(values.get('width', 1.0)), 0.01), max(float(values.get('height', 1.0)), 0.01)
+        else:
+            light.shadow_soft_size = max(float(values.get('size', 0.0)) * 0.5, 0.05)
         if hasattr(light, 'use_custom_distance'):
             light.use_custom_distance = True
             light.cutoff_distance = max(float(values.get('radius', 10.0)), 0.1)

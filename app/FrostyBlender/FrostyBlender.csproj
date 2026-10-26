@@ -9,7 +9,7 @@
     <ApplicationIcon>Assets/icon.ico</ApplicationIcon>
     <AssemblyName>FrostyBlender</AssemblyName>
     <RootNamespace>FrostyBlender</RootNamespace>
-    <Version>1.8.0</Version>
+    <Version>1.8.1</Version>
     <Product>FrostyBlender</Product>
     <Company>4FingerStudios</Company>
     <Copyright>4FingerStudios. GPL-3.0-or-later.</Copyright>
@@ -21,6 +21,13 @@
     <DebugType>embedded</DebugType>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
+  <!-- Dev builds only (build.py with the dev flag passes Unreal=true): the Send to Unreal button and Unreal link. -->
+  <PropertyGroup Condition="'$(Unreal)' == 'true'">
+    <DefineConstants>$(DefineConstants);UNREAL</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(Unreal)' != 'true'">
+    <Compile Remove="Services\UnrealLink.cs" />
+  </ItemGroup>
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />
   </ItemGroup>

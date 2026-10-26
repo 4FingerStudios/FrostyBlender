@@ -9,6 +9,8 @@ an import from the app behaves exactly like one from the tab.
     GET  /status      each tab's status line and whether an import is running
     GET  /armatures   armatures in the scene (animation targets), active one first
     POST /import      {"kind": "maps|cosmetics|npcs|props|effects|animations", "game": "GW1|GW2|BFN", ...}
+                      with "options": {"unreal": true} (maps, cosmetics, npcs, props), what the import added
+                      is then sent on to the open Unreal Editor (unreal_export.send_to_unreal)
     POST /addon-update {"archive": "...zip", "digest": "sha256:...", "version": "..."}
 
 Requests must carry the X-FrostyBlender header and no Origin header, so a web page in a
@@ -30,6 +32,8 @@ DEFAULT_PORT = 24567
 _server = None
 _requests = queue.Queue()   # (job id, request) for the main thread
 _jobs = {}                  # job id -> {'state', 'message', 'kind'}
+_unreal = {}                # job id -> {'before': object names, 'name'} for imports sent on to Unreal
+UNREAL_KINDS = ('maps', 'cosmetics', 'npcs', 'props')
 _counter = [0]
 _last_link = [0.0]
 
@@ -174,12 +178,45 @@ def _snap():
     arms.sort(key=lambda o: o is not active)
     _snapshot['tabs'] = {k: {'status': s, 'busy': b} for k, (s, b) in tabs.items()}
     _snapshot['armatures'] = [{'name': o.name, 'bones': len(o.data.bones), 'active': o is active} for o in arms]
-    for job in _jobs.values():  # a sent job is done when its tab is idle again
+    for job_id, job in list(_jobs.items()):  # a sent job is done when its tab is idle again
         if job['state'] == 'running' and job['kind'] in tabs:
             status, busy = tabs[job['kind']]
-            if not busy:
-                job['state'] = 'failed' if status.startswith(('Failed', 'Blender import failed')) else 'done'
             job['message'] = status
+            if not busy:
+                failed = status.startswith(('Failed', 'Blender import failed'))
+                pending = _unreal.pop(job_id, None)
+                if pending and not failed:  # stays running (the app keeps polling) until it's sent
+                    job['message'] = 'Imported; sending to Unreal...'
+                    _send_unreal(job, pending)
+                else:
+                    job['state'] = 'failed' if failed else 'done'
+
+
+def _send_unreal(job, pending):
+    """After an app import marked for Unreal: export the objects it added and send them to the editor."""
+    from . import unreal_export
+    try:
+        with bpy.context.temp_override(**_override()):
+            objects = [o for o in unreal_export.scene_objects(bpy.context, False) if o.name not in pending['before']]
+            if not objects:
+                raise ValueError('the import added no visible meshes')
+            unreal_job, message = unreal_export.send_to_unreal(bpy.context, objects, pending['name'])
+    except (ConnectionError, OSError, RuntimeError, ValueError) as error:
+        job.update(state='failed', message='Imported in Blender, but not sent to Unreal: %s' % error)
+        return
+    job.update(state='done', message=message, unreal_job=unreal_job)
+
+
+def _has_unreal():
+    """Export for Unreal ships in dev builds only."""
+    return Path(__file__).with_name('unreal_export.py').is_file()
+
+
+def _unreal_name(request):
+    for key in ('map', 'character', 'group'):
+        if isinstance(request.get(key), dict) and request[key].get('name'):
+            return request[key]['name']
+    return 'FrostyBlender'
 
 
 def _override():
@@ -330,11 +367,15 @@ def tick():
         while True:
             job, request = _requests.get_nowait()
             _jobs[job].update(state='running', message='Starting...')
+            options = request.get('options') or {}
+            if options.get('unreal') and request['kind'] in UNREAL_KINDS and _has_unreal():
+                _unreal[job] = {'before': {o.name for o in bpy.data.objects}, 'name': _unreal_name(request)}
             try:
                 error = _run(request)
             except Exception as exc:  # report, never kill the timer
                 error = str(exc)
             if error:
+                _unreal.pop(job, None)
                 _jobs[job].update(state='failed', message=error)
             elif request['kind'] == 'addon_update':
                 _jobs[job].update(state='done', message='Add-on updated. Save your work and restart Blender.')

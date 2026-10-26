@@ -27,6 +27,8 @@ public partial class MainViewModel
     private void InitializeUpdates()
     {
         CheckUpdatesOnStartup = _settings.CheckUpdatesOnStartup;
+        // A dev build would be replaced by the release app and add-on, which leave Unreal out: no startup checks.
+        if (UnrealEnabled) return;
         if (CheckUpdatesOnStartup) _ = CheckForAddonUpdates();
         var log = Path.Combine(BlenderLink.Folder, "update.log");
         if (File.Exists(log))

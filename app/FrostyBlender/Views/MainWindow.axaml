@@ -215,6 +215,18 @@
                         <TextBlock Text="{Binding SendText}" VerticalAlignment="Center" />
                       </StackPanel>
                     </Button>
+                    <Button HorizontalAlignment="Stretch" Padding="0,7" IsVisible="{Binding CanSendUnreal}"
+                            Command="{Binding SendUnrealCommand}" IsEnabled="{Binding !Sending}"
+                            ToolTip.Tip="Imports in Blender, then sends what it imported straight into the open Unreal Editor (needs the FrostyBlender Unreal plugin)">
+                      <StackPanel Spacing="1" HorizontalAlignment="Center">
+                        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                          <Ellipse Width="7" Height="7" Fill="{StaticResource Live}" IsVisible="{Binding UnrealConnected}" VerticalAlignment="Center" />
+                          <Ellipse Width="7" Height="7" Fill="{StaticResource Muted}" IsVisible="{Binding !UnrealConnected}" VerticalAlignment="Center" />
+                          <TextBlock Text="Send to Unreal" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding UnrealStatus}" FontSize="10.5" Foreground="{StaticResource Muted}" HorizontalAlignment="Center" />
+                      </StackPanel>
+                    </Button>
                     <TextBlock Text="{Binding Hint}" FontSize="11" TextWrapping="Wrap" />
                   </StackPanel>
                 </Border>
@@ -744,6 +756,27 @@
               </StackPanel>
             </Border>
 
+            <Border Classes="card" IsVisible="{Binding UnrealEnabled}">
+              <StackPanel Spacing="14">
+                <Grid ColumnDefinitions="*,Auto">
+                  <StackPanel Spacing="2">
+                    <TextBlock Classes="eyebrow" Text="UNREAL LINK" />
+                    <TextBlock Classes="h2" Text="{Binding UnrealStatus}" />
+                  </StackPanel>
+                  <Border Grid.Column="1" Classes="chip" VerticalAlignment="Center" Padding="10,4">
+                    <StackPanel Orientation="Horizontal" Spacing="7">
+                      <Ellipse Width="8" Height="8" Fill="{StaticResource Accent}" IsVisible="{Binding UnrealConnected}" VerticalAlignment="Center" />
+                      <Ellipse Width="8" Height="8" Fill="{StaticResource Danger}" IsVisible="{Binding !UnrealConnected}" VerticalAlignment="Center" />
+                      <TextBlock Text="Live" FontSize="11" FontWeight="SemiBold" IsVisible="{Binding UnrealConnected}" />
+                      <TextBlock Text="Offline" FontSize="11" FontWeight="SemiBold" IsVisible="{Binding !UnrealConnected}" />
+                    </StackPanel>
+                  </Border>
+                </Grid>
+                <TextBlock TextWrapping="Wrap" Classes="muted"
+                           Text="Send to Unreal imports in Blender, then Blender exports what it imported and the Unreal Editor imports it under Content/FrostyBlender, map and all. Unzip FrostyBlender-Unreal-….zip into your project's Plugins folder (Plugins/FrostyBlender/FrostyBlender.uplugin), then keep the project open in Unreal 5 while you send. Blender must be open too." />
+              </StackPanel>
+            </Border>
+
             <Border Classes="card">
               <StackPanel Spacing="14">
                 <StackPanel Spacing="2">
@@ -839,6 +872,8 @@
             <Ellipse Width="7" Height="7" Fill="{StaticResource Live}" IsVisible="{Binding Connected}" />
             <Ellipse Width="7" Height="7" Fill="{StaticResource Muted}" IsVisible="{Binding !Connected}" />
             <TextBlock Text="{Binding BlenderStatus}" FontSize="11.5" />
+            <Ellipse Width="7" Height="7" Fill="{StaticResource Live}" IsVisible="{Binding UnrealConnected}" Margin="8,0,0,0" />
+            <TextBlock Text="{Binding UnrealStatus}" FontSize="11.5" IsVisible="{Binding UnrealConnected}" />
           </StackPanel>
           <TextBlock Grid.Column="1" Text="{Binding JobStatus}" FontSize="11.5" Foreground="{StaticResource Muted}" HorizontalAlignment="Center"
                      VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="20,0" />

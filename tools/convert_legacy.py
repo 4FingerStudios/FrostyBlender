@@ -7,10 +7,12 @@ from pathlib import Path
 import numpy as np
 from convert import Archive, png, write_mesh, write_skin, read_attr, skin_attrs
 import bfn_maps
+import bfn_physics
 import bfn_terrain
 import bfn_decals
 import bfn_map_effects
 import bfn_water
+import environment
 import markers
 
 MESHSET_TYPE = 0x49B156D4
@@ -23,6 +25,10 @@ ROLES = {
     'mask': ['asm', '__rsmemissive', 'rsmtexture', '_rsm', 'material2_asm'],
 }
 ALPHA_HINTS = ('foliage', 'grass', 'leaf', 'leaves', 'vegetation', 'vegitation', 'fern', 'ivy', 'decal', 'hedge', 'bush', 'flower', 'vine')
+# Meshes the game places but never draws: invisible walls and gameplay blockers (collision only), and lighting
+# blockers that only shape baked light.
+INVISIBLE_HELPERS = re.compile(r'blockingvolume|damageblock|enlightenblocker|radiosity_\w*blocker', re.I)
+BLOCKING = re.compile(r'blockingvolume|damageblock', re.I)
 ENVIRONMENT_ROOTS = ('LevelData', 'SubWorldData', 'DetachedSubWorldData', 'WorldPartData', 'LayerData', 'PrefabBlueprint', 'SpatialPrefabBlueprint')
 # Battle for Neighborville streams most world geometry from gameplay logic instead of AutoLoad,
 # so its sub-worlds are chosen by name: everything except logic, game modes, cinematics and tests.
@@ -190,6 +196,9 @@ class LegacyConverter:
         # Battle for Neighborville water materials, decal volumes and placed effects (bfn_*.py).
         self.water = set()
         self.water_entities = []
+        self.environments = []  # (priority, source, (doc, blueprint)) of visual environment references
+        self.collisions = {}  # physics resource id -> collision mesh path, or None when unreadable
+        self.collision_bounds = {}
         self.decals = bfn_decals.Decals(self)
         self.effects = bfn_map_effects.MapEffects(self, textures)
 
@@ -309,13 +318,18 @@ class LegacyConverter:
         return self.meshes[rid]
 
     def place(self, places, mesh_ref, doc, matrix, source):
+        """Place a mesh; False when it is an invisible helper (a blocking volume or lighting blocker) the
+        game never draws, whose collision the caller places instead."""
         found = self.resolve(doc, mesh_ref)
         if not found: raise ValueError('Mesh asset unresolved')
         mesh_doc, mesh_obj = found
-        if mesh_obj.get('$type') not in ('RigidMeshAsset', 'CompositeMeshAsset'): return
+        if mesh_obj.get('$type') not in ('RigidMeshAsset', 'CompositeMeshAsset'): return True
+        name = mesh_obj.get('Name', '').split('/')[-1]
+        if INVISIBLE_HELPERS.search(name):
+            self.counts['invisible_helpers'] = self.counts.get('invisible_helpers', 0) + 1
+            return False
         rel, mats, positions, triangles = self.mesh(mesh_doc, mesh_obj)
         if not np.isfinite(matrix).all(): raise ValueError('Placement transform is not finite')
-        name = mesh_obj.get('Name', '').split('/')[-1]
         tags = {'mesh': rel, 'source': mesh_obj.get('Name', '')}
         tags.update({f'material_{i}': m for i, m in enumerate(mats)})
         if self.water and all(m in self.water for m in mats):
@@ -327,11 +341,56 @@ class LegacyConverter:
             places.append({'kind': 'frostbite_mesh', 'name': name, 'matrix': matrix.tolist(), 'tags': tags, 'values': {'collision': 0},
                            '_source': source, '_bounds': bounds})
             self.counts['instances'] += 1
-            return
+            return True
         places.append({'kind': 'frostbite_mesh', 'name': name, 'matrix': matrix.tolist(), 'tags': tags, 'values': {'collision': 1},
                        '_source': source})
         self.floor.append((rid_of(mesh_obj), matrix))
         self.counts['instances'] += 1
+        return True
+
+    # ---- collision ----
+    def collision(self, places, doc, obj, matrix, source, fallback=None):
+        """The game's collision for a static model or model group (tools/bfn_physics.py), as a hidden collision
+        mesh in the owner's space. fallback: a blocking volume's own mesh, used as its collision when it has no
+        physics of its own (lighting blockers block nothing and are left out)."""
+        rel = None
+        for ref in obj.get('Components') or []:
+            comp = self.resolve(doc, ref)
+            if not comp or comp[1].get('$type') != 'FBPhysicsComponentData' or not comp[1].get('Asset'): continue
+            asset = self.resolve(comp[0], comp[1]['Asset'])
+            rid = ((asset[1].get('Resource') or {}).get('$resource')) if asset else None
+            if not rid: continue
+            if rid not in self.collisions:
+                self.collisions[rid] = None
+                res = self.archive.resources.get(rid)
+                sections = bfn_physics.collision_sections(self.archive.data(res)) if res else None
+                if sections:
+                    self.collisions[rid] = 'meshes/frostbite/collision_' + rid + '.amsh'
+                    write_mesh(self.assets / self.collisions[rid], sections)
+                    self.collision_bounds[rid] = (sections[0]['positions'].min(axis=0), sections[0]['positions'].max(axis=0))
+                else:
+                    self.counts['collision_unreadable'] = self.counts.get('collision_unreadable', 0) + 1
+            rel = self.collisions[rid]
+            if rel:
+                low, high = self.collision_bounds[rid]
+                corners = np.array([[x, y, z] for x in (low[0], high[0]) for y in (low[1], high[1]) for z in (low[2], high[2])])
+                world = corners @ matrix[:3, :3].T + matrix[:3, 3]
+                bounds = (*world[:, [0, 2]].min(axis=0).tolist(), *world[:, [0, 2]].max(axis=0).tolist())
+                label = (asset[1].get('Name') or 'BFN').split('/')[-1].replace('.physics', '').replace('.Physics', '')
+                places.append({'kind': 'frostbite_collision', 'name': label + ' collision',
+                               'matrix': matrix.tolist(), 'values': {'collision': 1}, '_source': source, '_bounds': bounds,
+                               'tags': {'mesh': rel, 'source': asset[1].get('Name', ''), 'collision_source': 'game_physics'}})
+                self.counts['collision_shapes'] = self.counts.get('collision_shapes', 0) + 1
+            break
+        if rel is None and fallback is not None:
+            found = self.resolve(doc, fallback)
+            name = found[1].get('Name', '').split('/')[-1] if found else ''
+            if found and BLOCKING.search(name):
+                mesh_rel = self.mesh(found[0], found[1])[0]
+                places.append({'kind': 'frostbite_collision', 'name': name, 'matrix': matrix.tolist(), 'values': {'collision': 1},
+                               '_source': source, 'tags': {'mesh': mesh_rel, 'source': found[1].get('Name', ''),
+                                                           'collision_source': 'blocking_volume'}})
+                self.counts['collision_shapes'] = self.counts.get('collision_shapes', 0) + 1
 
     # ---- terrain ----
     def terrain_material(self, terrain_obj):
@@ -435,6 +494,20 @@ class LegacyConverter:
                 self.water_entities.append((doc, obj, matrix @ transform(obj.get('Transform', {}))))
             elif kind == 'EnvironmentDecalVolumeData' and self.game == 'bfn':
                 self.decals.add(doc, obj, matrix, source)
+            elif kind in ('VisualEnvironmentReferenceObjectData', 'LogicVisualEnvironmentReferenceObjectData'):
+                # The level's sun, sky and fog (tools/environment.py): the kept sub-worlds reference the chosen
+                # map's own, day or night.
+                target = self.resolve(doc, obj.get('Blueprint'))
+                if target and not obj.get('Excluded'): self.environments.append((obj.get('Priority', 0), source, target))
+            elif kind in environment.PBR_LIGHTS:
+                light = environment.pbr_light_values(obj)
+                if light:
+                    places.append({'kind': 'frostbite_light', 'name': kind.replace('EntityData', ''), 'values': light,
+                                   'matrix': (matrix @ transform(obj.get('Transform', {}))).tolist(),
+                                   'tags': {'level_instance': source, 'profile': self.game}, '_source': source})
+                    self.counts['lights'] = self.counts.get('lights', 0) + 1
+                else:
+                    self.counts['lights_switched_by_game'] = self.counts.get('lights_switched_by_game', 0) + 1
             elif kind.endswith('ReferenceObjectData'):
                 if obj.get('Excluded'): return
                 if kind == 'SubWorldReferenceObjectData' and not self.environment(obj): return
@@ -451,9 +524,13 @@ class LegacyConverter:
                 if child: self.walk(places, child[0], child[1], matrix, source, depth + 1, stack)
             elif kind == 'StaticModelEntityData':
                 if not obj.get('Visible', True): self.counts['skipped_hidden'] += 1; return
-                self.place(places, obj.get('Mesh'), doc, matrix @ transform(obj.get('Transform', {})), source)
+                at = matrix @ transform(obj.get('Transform', {}))
+                drawn = self.place(places, obj.get('Mesh'), doc, at, source)
+                if self.game == 'bfn': self.collision(places, doc, obj, at, source, fallback=None if drawn else obj.get('Mesh'))
             elif kind == 'StaticModelGroupEntityData':
-                self.group(places, doc, obj, matrix @ transform(obj.get('Transform', {})), source)
+                at = matrix @ transform(obj.get('Transform', {}))
+                self.group(places, doc, obj, at, source)
+                if self.game == 'bfn': self.collision(places, doc, obj, at, source)
             elif kind == 'TerrainEntityData' and self.game == 'bfn':
                 self.terrain(places, doc, obj, matrix, source)
         except Exception as e:
@@ -631,7 +708,8 @@ class LegacyConverter:
         if self.area: places = self.crop(places)
         for p in places: p.pop('_source', None); p.pop('_bounds', None)
         if not places: raise ValueError('No map placements were converted')
-        positions = np.array([np.array(p['matrix'])[:3, 3] for p in places])
+        positions = np.array([np.array(p['matrix'])[:3, 3] for p in places if p['kind'] == 'frostbite_mesh'] or
+                             [np.array(p['matrix'])[:3, 3] for p in places])
         spawn = np.median(positions, axis=0)
         floor = None
         order = np.argsort(np.linalg.norm(positions[:, [0, 2]] - spawn[[0, 2]], axis=1))
@@ -652,8 +730,15 @@ class LegacyConverter:
             self.counts.update(self.effects.counts)
             self.counts['water_surfaces'] = sum(p.get('tags', {}).get('surface') == 'water' for p in places)
             self.counts['sea_levels'] = [p['tags']['sea_level'] for p in places if 'sea_level' in p.get('tags', {})]
+        outdoor = {'stream_load_distance': 256, 'stream_unload_distance': 320, 'sun_intensity': 2.4}
+        if self.game == 'bfn':
+            def sky_texture(doc, ref):
+                return self.texture(doc, ref)[0]
+            outdoor.update(environment.pick(self.environments, self.resolve, sky_texture, physical=True))
+            self.counts['light_scale'] = round(environment.scale_lights(places, outdoor), 6)
+            self.counts['environment'] = outdoor.get('environment', '')
         places.insert(0, {'kind': 'frostbite_environment', 'name': title + ' outdoor settings', 'at': [0, 0, 0], 'tags': {},
-                          'values': {'stream_load_distance': 256, 'stream_unload_distance': 320, 'sun_intensity': 2.4}})
+                          'values': outdoor})
         places.insert(0, {'kind': 'spawn', 'name': title + ' editor spawn', 'at': spawn.tolist(), 'tags': {}, 'values': {}})
         report = {'map': root_name, 'game': self.game, 'placements': len(places), 'meshes': len(self.meshes), 'materials': len(self.materials),
                   'textures': len(self.texture_paths), 'counts': self.counts, 'errors': self.errors,
@@ -665,6 +750,8 @@ class LegacyConverter:
                                   if self.game == 'bfn' else
                                   ['Static meshes and Battle for Neighborville terrain heightfields only: water, decals, effects and gameplay entities are not converted.']) + [
                                   'Terrain uses one authored grass surface; native terrain splat layers, holes and scatter meshes are not translated.',
+                                  'Collision comes from the game\'s own physics shapes (convex hulls, spheres, capsules) and blocking volumes; '
+                                  'physics files with extra sections are skipped.' if self.game == 'bfn' else
                                   'Rendered triangles serve as collision; original Havok collision is not translated.',
                                   'Materials use base colour and normal maps with Aura shading approximations.',
                                   'Game-mode sublevels are skipped unless --everything is given.']}
