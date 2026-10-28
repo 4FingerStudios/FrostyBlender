@@ -5,12 +5,48 @@ tools/effects.py (effect_data and its BfnConverter, owned by the effects tools) 
 effects/frostbite/<hash>.json, which the add-on's effects_build.py plays. Effects that wait for
 gameplay to start them (AutoStart off: capture zones, pickups, abilities) are skipped unless
 AURA_BFN_MAP_EFFECTS=all, since a map at rest never shows them.
+
+Simulating an effect runs its emitters' compute shaders on the CPU, seconds per effect, and maps share their
+effects. So each converted effect is kept, with the files it uses, in <output folder>/.cache/bfn_effects,
+keyed by the blueprint and a hash of the simulation code: an import that meets it again copies it instead.
 """
 import hashlib
 import json
 import os
+import re
+import shutil
+from pathlib import Path
 
 import numpy as np
+
+ASSET_REF = re.compile(r'"((?:textures|meshes|materials)/frostbite/[^"]+\.(?:png|amsh|json))"')
+
+
+def _files(text, root):
+    """The asset files an effect uses, under root: its textures, particle meshes and their materials, and the
+    textures those materials use."""
+    found, queue = set(), list(ASSET_REF.findall(text or ''))
+    while queue:
+        rel = queue.pop()
+        if rel in found:
+            continue
+        found.add(rel)
+        if rel.endswith('.json'):
+            try:
+                queue += ASSET_REF.findall((root / rel).read_text(encoding='utf-8'))
+            except OSError:
+                pass
+    return found
+
+
+def _code_version():
+    """Changes whenever the effect simulation does, so stale cached effects are never used."""
+    digest = hashlib.sha1()
+    for name in ('effects.py', 'emitter_graph.py', 'dxbc.py', 'bfn_map_effects.py'):
+        path = Path(__file__).with_name(name)
+        if path.is_file():
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:12]
 
 
 class MapEffects:
@@ -23,6 +59,42 @@ class MapEffects:
         self.counts = {'effect_references': 0, 'effects_placed': 0, 'effects_triggered_skipped': 0,
                        'effect_blueprints': 0, 'effects_empty': 0}
         self._effects = None
+        cache = os.environ.get('AURA_BFN_EFFECT_CACHE')
+        self.cache = Path(cache) if cache else Path(self.c.assets).resolve().parent.parent / '.cache' / 'bfn_effects'
+        self.version = _code_version()
+
+    def cached(self, guid, rel):
+        """A cached conversion of this blueprint, copied into this import with its files; None when there is none,
+        'empty' when the blueprint has nothing to show."""
+        entry = self.cache / ('%s_%s.json' % (guid, self.version))
+        try:
+            text = entry.read_text(encoding='utf-8')
+            if text == 'null':
+                return 'empty'
+            for used in _files(text, self.cache):
+                target = Path(self.c.assets) / used
+                if not target.is_file():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(self.cache / used, target)
+            (Path(self.c.assets) / rel).parent.mkdir(parents=True, exist_ok=True)
+            (Path(self.c.assets) / rel).write_text(text, encoding='utf-8')
+        except OSError:
+            return None
+        self.counts['effects_from_cache'] = self.counts.get('effects_from_cache', 0) + 1
+        return rel
+
+    def remember(self, guid, text):
+        """Keep a fresh conversion (text None: nothing to show) and its files for later imports."""
+        try:
+            for used in _files(text, Path(self.c.assets)):
+                source, target = Path(self.c.assets) / used, self.cache / used
+                if source.is_file() and not target.is_file():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, target)
+            self.cache.mkdir(parents=True, exist_ok=True)
+            (self.cache / ('%s_%s.json' % (guid, self.version))).write_text(text or 'null', encoding='utf-8')
+        except OSError:
+            pass  # a cache that can't be written only costs the next import time
 
     def add(self, doc, obj, matrix, source):
         """Record one EffectReferenceObjectData; places are made after the map is cropped."""
@@ -51,20 +123,32 @@ class MapEffects:
             return self.data[doc['guid']]
         name = next((a['name'] for a, d in self.c.archive.documents.values() if d is doc), doc['guid'])
         title = name.split('/')[-1]
+        rel = 'effects/frostbite/%s.json' % hashlib.sha1(name.lower().encode()).hexdigest()[:16]
+        hit = self.cached(doc['guid'], rel)
+        if hit:
+            self.data[doc['guid']] = (None if hit == 'empty' else rel, name)
+            return self.data[doc['guid']]
         effects, converter = self.module()
         try:
             data = effects.effect_data(self.c.archive, converter, doc, title)
         except Exception as error:  # one effect must not stop the map
             self.c.errors.append({'stage': 'effect', 'source': name, 'error': str(error)})
             data = None
-        rel = None
+            failed = True
+        else:
+            failed = False
         if data and (data['emitters'] or data['lights']):
-            rel = 'effects/frostbite/%s.json' % hashlib.sha1(name.lower().encode()).hexdigest()[:16]
+            text = json.dumps(data)
             (self.c.assets / rel).parent.mkdir(parents=True, exist_ok=True)
-            (self.c.assets / rel).write_text(json.dumps(data), encoding='utf-8')
+            (self.c.assets / rel).write_text(text, encoding='utf-8')
             self.counts['effect_blueprints'] += 1
-        elif data is not None:
-            self.counts['effects_empty'] += 1
+            self.remember(doc['guid'], text)
+        else:
+            rel = None
+            if data is not None:
+                self.counts['effects_empty'] += 1
+            if not failed:
+                self.remember(doc['guid'], None)
         self.data[doc['guid']] = (rel, name)
         return self.data[doc['guid']]
 

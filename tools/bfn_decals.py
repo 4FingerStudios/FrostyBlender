@@ -7,6 +7,7 @@ surface UVs from the box's projection, lifts it a little off the surface and dra
 alpha-blended material ('surface': 'decal', built by the add-on's decal_materials.py).
 Decals of one template are merged into one mesh.
 """
+import collections
 import hashlib
 import json
 import os
@@ -21,6 +22,7 @@ HALF = 1.0
 PROJECT = 1
 LIFT = 0.012        # metres the decal floats above its surface
 FACING = 0.25       # faces must point along +Y by at least this much: like the game's deferred decals, not their backs
+WORLD_CACHE = 512   # surfaces whose world triangles are kept while decals are projected
 BASE_KEYS = ('colortexture', 'texture', 'color', 'basecolor', 'diffuse')
 NORMAL_KEYS = ('packeddecalnormaltexture', 'normaltexture', 'normal')
 
@@ -53,6 +55,7 @@ class Decals:
         self.pending = []
         self.counts = {'decal_volumes': 0, 'decals_placed': 0, 'decals_empty': 0, 'decals_untextured': 0}
         self.templates = {}
+        self._world = collections.OrderedDict()  # surface index -> world triangles (see world_triangles)
 
     # ---- collection during the scene walk ----
     def add(self, doc, obj, matrix, source):
@@ -136,8 +139,26 @@ class Decals:
             return None
         return (np.array([i[0] for i in items]), np.array([i[1] for i in items]), items)
 
+    def world_triangles(self, i, items):
+        """A surface's world triangles, their bounds, unit normals and doubled areas, kept for the next decals
+        (sorted by position, neighbours share surfaces); the least recently used are let go past WORLD_CACHE."""
+        cached = self._world.get(i)
+        if cached is not None:
+            self._world.move_to_end(i)
+            return cached
+        _, _, entry, m = items[i]
+        world = (entry[2] @ m[:3, :3].T.astype(np.float32) + m[:3, 3].astype(np.float32))[entry[3]]
+        normal = np.cross(world[:, 1] - world[:, 0], world[:, 2] - world[:, 0])
+        length = np.linalg.norm(normal, axis=1)
+        cached = (world, world.min(axis=1), world.max(axis=1), normal / np.maximum(length, 1e-12)[:, None], length)
+        self._world[i] = cached
+        if len(self._world) > WORLD_CACHE:
+            self._world.popitem(last=False)
+        return cached
+
     def project(self, decal, found):
-        """Clipped, lifted triangles (world positions, normals, UVs) of one decal."""
+        """One decal's surface in its local space: (triangles fully inside the volume as an (n, 3, 3) array with
+        their normals, clipped polygons as (polygon, normal) pairs)."""
         lo, hi, items = found
         D = decal['matrix']
         inv = np.linalg.inv(D)
@@ -145,79 +166,82 @@ class Decals:
         centre = D[:3, 3]
         candidates = np.where(((lo <= centre + reach) & (hi >= centre - reach)).all(axis=1))[0]
         axis_world = D[:3, PROJECT] / np.linalg.norm(D[:3, PROJECT])
-        polys = []
+        full_tris, full_normals, polys = [], [], []
         for i in candidates:
-            _, _, entry, m = items[i]
-            to_local = inv @ m
-            local = entry[2] @ to_local[:3, :3].T + to_local[:3, 3]
-            tri = local[entry[3]]
-            tmin, tmax = tri.min(axis=1), tri.max(axis=1)
-            hit = ((tmax >= -HALF) & (tmin <= HALF)).all(axis=1)
-            if not hit.any():
+            world, wlo, whi, normal, length = self.world_triangles(i, items)
+            # Triangles near the volume's world box that face the projection; then the exact test, in its space.
+            pick = ((whi >= centre - reach) & (wlo <= centre + reach)).all(axis=1)
+            pick &= (normal @ axis_world > FACING) & (length > 1e-10)
+            if not pick.any():
                 continue
-            tri = tri[hit]
-            world = entry[2][entry[3][hit]] @ m[:3, :3].T + m[:3, 3]
-            normal = np.cross(world[:, 1] - world[:, 0], world[:, 2] - world[:, 0])
-            length = np.linalg.norm(normal, axis=1)
-            normal = normal / np.maximum(length, 1e-12)[:, None]
-            facing = (normal @ axis_world > FACING) & (length > 1e-10)
+            tri = world[pick].astype(np.float64) @ inv[:3, :3].T + inv[:3, 3]
+            hit = ((tri.max(axis=1) >= -HALF) & (tri.min(axis=1) <= HALF)).all(axis=1)
+            tri, n = tri[hit], normal[pick][hit].astype(np.float64)
             inside = (np.abs(tri) <= HALF).all(axis=(1, 2))
-            for t, n, full in zip(tri[facing], normal[facing], inside[facing]):
+            full_tris.append(tri[inside])
+            full_normals.append(n[inside])
+            for t, tn in zip(tri[~inside], n[~inside]):
                 poly = list(t)
-                if not full:
-                    for axis in range(3):
-                        for sign in (1, -1):
-                            poly = _clip(poly, axis, sign)
-                            if len(poly) < 3:
-                                break
+                for axis in range(3):
+                    for sign in (1, -1):
+                        poly = _clip(poly, axis, sign)
                         if len(poly) < 3:
                             break
+                    if len(poly) < 3:
+                        break
                 if len(poly) >= 3:
-                    polys.append((np.array(poly), n))
-        return polys
+                    polys.append((np.array(poly), tn))
+        full = (np.concatenate(full_tris), np.concatenate(full_normals)) if full_tris else (np.zeros((0, 3, 3)), np.zeros((0, 3)))
+        return full, polys
 
     def build(self, places, kept=lambda x, z: True):
         """Decal places for the decals at positions `kept(x, z)` accepts whose volumes reach a placed surface."""
         if not self.pending:
             return []
         found = self.surfaces(places)
+        self._world = collections.OrderedDict()
         groups = {}
         u_axis, v_axis = [a for a in range(3) if a != PROJECT]
-        for decal in self.pending:
+        # Neighbouring decals land on the same surfaces: in position order the surface cache keeps hitting.
+        for decal in sorted(self.pending, key=lambda d: (round(d['matrix'][0, 3] / 64), round(d['matrix'][2, 3] / 64))):
             if not kept(decal['matrix'][0, 3], decal['matrix'][2, 3]):
                 continue
             rel, (rows, columns), textured, title = self.material(decal['template'])
             if not textured:
                 self.counts['decals_untextured'] += 1
                 continue
-            polys = self.project(decal, found) if found else []
-            if not polys:
+            (tris, tri_normals), polys = self.project(decal, found) if found else ((np.zeros((0, 3, 3)), None), [])
+            if not polys and not len(tris):
                 self.counts['decals_empty'] += 1
                 continue
             D = decal['matrix']
             row, column = decal['row'] % rows, decal['column'] % columns
             group = groups.setdefault(rel, {'title': title, 'positions': [], 'normals': [], 'uv': [], 'indices': [],
-                                            'sources': set(), 'count': 0})
+                                            'sources': set(), 'count': 0, 'size': 0})
             group['count'] += 1
             group['sources'].add(decal['source'])
-            for poly, normal in polys:
-                # Fan-triangulate the clipped convex polygon.
-                base = len(group['positions'])
-                world = poly @ D[:3, :3].T + D[:3, 3] + normal * LIFT
-                u = (poly[:, u_axis] / (2 * HALF) + .5 + column) / columns
-                v = (.5 + poly[:, v_axis] / (2 * HALF) + row) / rows
-                group['positions'].extend(world)
-                group['normals'].extend([normal] * len(poly))
-                group['uv'].extend(np.stack([u, v], axis=1))
-                for k in range(1, len(poly) - 1):
-                    group['indices'].extend((base, base + k, base + k + 1))
+
+            def add(points, normals, triangles):
+                """Lift into world space beside the surface, atlas UVs from the volume's local position."""
+                group['indices'].append(triangles + group['size'])
+                group['positions'].append(points @ D[:3, :3].T + D[:3, 3] + normals * LIFT)
+                group['normals'].append(normals)
+                group['uv'].append(np.stack([(points[:, u_axis] / (2 * HALF) + .5 + column) / columns,
+                                             (.5 + points[:, v_axis] / (2 * HALF) + row) / rows], axis=1))
+                group['size'] += len(points)
+            if len(tris):
+                add(tris.reshape(-1, 3), np.repeat(tri_normals, 3, axis=0), np.arange(len(tris) * 3).reshape(-1, 3))
+            for poly, normal in polys:  # fan-triangulate each clipped convex polygon
+                k = np.arange(1, len(poly) - 1)
+                add(poly, np.tile(normal, (len(poly), 1)), np.stack([np.zeros_like(k), k, k + 1], axis=1))
         out = []
         for rel, g in groups.items():
-            positions = np.array(g['positions'], np.float64)
+            positions = np.concatenate(g['positions']).astype(np.float64)
             centre = (positions.min(axis=0) + positions.max(axis=0)) * .5
             section = {'name': g['title'], 'positions': (positions - centre).astype(np.float32),
-                       'normals': np.array(g['normals'], np.float32), 'uv': np.array(g['uv'], np.float32),
-                       'indices': np.array(g['indices'], np.uint32),
+                       'normals': np.concatenate(g['normals']).astype(np.float32),
+                       'uv': np.concatenate(g['uv']).astype(np.float32),
+                       'indices': np.concatenate(g['indices']).reshape(-1).astype(np.uint32),
                        'color': np.ones((len(positions), 3), np.float32), 'palette': np.zeros(len(positions), np.float32),
                        'material_id': 0}
             key = 'bfn_decal_' + os.path.basename(rel)[len('decal_'):-len('.json')]

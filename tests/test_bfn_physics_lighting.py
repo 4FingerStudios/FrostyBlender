@@ -21,11 +21,12 @@ def volume(vertices, triangles):
 CUBE = np.array([[x, y, z] for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)], float)
 
 
-def physics_resource(instances):
-    """A version 2 physics resource with one box hull and the given (kind, position, half/w, radius) instances."""
-    header = struct.pack('<12I', 2, 0, 1, len(instances), 1, 8, 24, 0, 0, 8, 0, 0)
+def physics_resource(instances, bodies=0):
+    """A version 2 physics resource with one box hull and the given (kind, position, half/w, radius) instances,
+    after `bodies` rigid body blocks."""
+    header = struct.pack('<12I', 2, bodies, 1, len(instances), 1, 8, 24, 0, 0, 8, 0, 0)
     shape = bytes(0x28) + struct.pack('<3I', 8, 24, 8) + bytes(4)
-    body = header + shape
+    body = header + struct.pack('<f', 0.1) * (bodies * bfn_physics.BODY // 4) + shape
     body += bytes((-len(body)) % 16)
     for kind, position, w, radius in instances:
         entry = struct.pack('<4f4f', *position, w, 0, 0, 0, 1) + struct.pack('<f I', radius, kind)
@@ -61,9 +62,14 @@ class PhysicsChecks(unittest.TestCase):
         self.assertAlmostEqual(float(positions[:, 0].max()), 11.0, places=4)
         self.assertTrue(8.0 < volume(positions.astype(float), triangles) < 8.0 + 4 / 3 * math.pi)
 
+    def test_rigid_body_blocks_come_before_the_shapes(self):
+        data = physics_resource([(3, (0, 5, 0), 1, 0)], bodies=3)
+        section = bfn_physics.collision_sections(data)[0]
+        self.assertAlmostEqual(float(section['positions'][:, 1].max()), 6.0, places=4)
+
     def test_unknown_layouts_are_skipped(self):
         data = bytearray(physics_resource([(3, (0, 0, 0), 1, 0)]))
-        struct.pack_into('<I', data, 4, 1)  # an extra section this reader doesn't know
+        struct.pack_into('<I', data, 0, 7)  # a version this reader doesn't know
         self.assertIsNone(bfn_physics.shapes(bytes(data)))
 
 

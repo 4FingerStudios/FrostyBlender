@@ -8,6 +8,7 @@ from convert import Archive, Converter, matrix, read_attr, write_mesh, write_ski
 from gw2_terrain import terrain_tree, tile_heights, height_section
 from gw2_groups import group_instances, gw1_part_poses
 import environment
+import gw2_physics
 
 
 SPAWNS = ('PVZCharacterSpawnReferenceObjectData', 'AlternateSpawnEntityData', 'VehicleSpawnReferenceObjectData')
@@ -184,6 +185,7 @@ class Gw2Converter(Converter):
         self.skipped_meshes = {}
         self.floor_meshes = {}
         self.terrain_tiles = 0
+        self.physics_meshes = {}  # Havok resource id -> collision mesh path, or None (tools/gw2_physics.py)
         self.grouped_instances = 0
         self.unplaced_group_instances = []
         from map_rigs import MapRigs
@@ -415,6 +417,29 @@ class Gw2Converter(Converter):
             raise ValueError('GW2 editor spawn has no generated collision floor')
         return max(heights)
 
+    def physics_collision(self, doc, obj):
+        """The collision mesh of a static model's Havok physics (tools/gw2_physics.py), written once per resource;
+        None when it has none or holds shapes the reader doesn't decode."""
+        data = self.archive.resolve(doc, obj.get('PhysicsData'))
+        asset = self.archive.resolve(data[0], data[1].get('Asset')) if data else None
+        rid = ((asset[1].get('Resource') or {}).get('$resource')) if asset else None
+        if not rid:
+            return None
+        if rid not in self.physics_meshes:
+            self.physics_meshes[rid] = None
+            resource = self.archive.resources.get(rid)
+            try:
+                sections = gw2_physics.collision_sections(self.archive.data(resource), resource.get('metadata') or []) if resource else None
+            except (ValueError, struct.error) as error:
+                self.errors.append({'stage': 'collision', 'name': asset[1].get('Name', ''), 'error': str(error)})
+                sections = None
+            if sections:
+                rel = f'meshes/frostbite/gw2_collision_{rid}.amsh'
+                write_mesh(self.assets / rel, sections)
+                self.physics_meshes[rid] = rel
+                self.counts['collision_game_physics'] = self.counts.get('collision_game_physics', 0) + 1
+        return self.physics_meshes[rid]
+
     def document_name(self, doc):
         """The EBX name of an exported document ('gameplay/complexobjects/plantteleporterexit')."""
         found = self.archive.by_guid.get(doc.get('guid'))
@@ -630,13 +655,15 @@ class Gw2Converter(Converter):
                 tags.update(rig_tags or {})
                 places.append({'kind': 'frostbite_mesh', 'name': mesh[1].get('Name', '').split('/')[-1],
                                'matrix': world.tolist(), 'tags': tags, 'values': {'collision': 0}})
-                # GW2 Havok is a different format. Generate a static triangle
-                # collider explicitly rather than claiming to decode native physics.
-                # Skinned objects move, so their bind pose makes no collider.
+                # The game's own convex shapes when its Havok physics is readable (tools/gw2_physics.py), else
+                # the render triangles. Skinned objects move, so their bind pose makes no collider. The render
+                # triangles stay the floor the spawn search reads either way.
                 if rig_tags is None and not any(part in mesh[1].get('Name','').lower() for part in ('cloudsgeo','skydome','skybox','light_shadowmap')):
+                    physics = None if gw1 else self.physics_collision(doc, obj)
                     places.append({'kind': 'frostbite_collision', 'name': 'GW2 static surface collider',
-                                   'matrix': world.tolist(), 'tags': {'mesh': path, 'level_instance': source,
-                                                                   'profile': 'gw2', 'collision_source': 'render_mesh'},
+                                   'matrix': world.tolist(), 'tags': {'mesh': physics or path, 'level_instance': source,
+                                                                   'profile': 'gw2',
+                                                                   'collision_source': 'game_physics' if physics else 'render_mesh'},
                                    'values': {'collision': 1}})
                     self.collision_geometry.append((path, world))
             elif kind in ('VisualEnvironmentReferenceObjectData', 'LogicVisualEnvironmentReferenceObjectData'):

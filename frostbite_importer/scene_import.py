@@ -36,6 +36,8 @@ BONE_AXES = Matrix(((0, 1, 0, 0), (1, 0, 0, 0), (0, 0, -1, 0), (0, 0, 0, 1)))
 # Strength of Blender's sky texture standing in for Battle for Neighborville's physical sky, beside the
 # scene's 2 W/m2 sun (tools/environment.py scales the game's lights the same way).
 PHYSICAL_SKY_STRENGTH = 0.25
+MAX_SHADOW_LIGHTS = 32  # lights that keep their shadows on a map, beside the sun
+MAP_SHADOW_POOL = 1024  # MB of EEVEE shadow pool a map import asks for
 
 
 def _to_sun(values):
@@ -444,6 +446,7 @@ class Importer:
                     count += 1
         finally:
             wm.progress_end()
+        self.limit_shadows(root)
         for space in (a.spaces.active for w in wm.windows for a in w.screen.areas if a.type == 'VIEW_3D'):
             space.clip_end = max(space.clip_end, 10000.0)
         if self.clip_length and context.scene.frame_end < self.clip_length:
@@ -496,6 +499,10 @@ class Importer:
         if values.get('environment'):
             ob['frostbite_environment'] = values['environment']
         root.objects.link(ob)
+        # A whole map's sun shadow overflows EEVEE's default 512 MB shadow pool (missing shadows); raise it.
+        eevee = getattr(context.scene, 'eevee', None)
+        if eevee is not None and hasattr(eevee, 'shadow_pool_size') and int(eevee.shadow_pool_size) < MAP_SHADOW_POOL:
+            eevee.shadow_pool_size = str(MAP_SHADOW_POOL)
         world = context.scene.world or bpy.data.worlds.new('World')
         context.scene.world = world
         world.use_nodes = True
@@ -646,6 +653,18 @@ class Importer:
         layers.location, amount.location, mix.location, output.location = (-400, 0), (-150, 150), (50, 0), (300, 0)
         scene['frostbite_fog'] = 'Compositor: %s, fog %.0f-%.0f m' % (tree.name, start, end)
 
+    def limit_shadows(self, root):
+        """Hundreds of shadowed lamps (map lights and the lights of placed effects) overflow EEVEE's shadow pool:
+        missing shadows and a slow viewport. Only the MAX_SHADOW_LIGHTS that light the most (power times reach
+        squared) keep their shadows; the sun always does."""
+        def weight(light):
+            reach = light.cutoff_distance if getattr(light, 'use_custom_distance', False) else 10.0
+            return light.energy * reach * reach
+        lights = {ob.data for ob in root.all_objects if ob.type == 'LIGHT' and ob.data.type != 'SUN'}
+        shadowed = sorted((light for light in lights if light.use_shadow), key=weight, reverse=True)
+        for light in shadowed[MAX_SHADOW_LIGHTS:]:
+            light.use_shadow = False
+
     def light(self, place, root):
         """A game point, spot or rectangle light. GW1/GW2 strength is the game's intensity in watts-ish units;
         Battle for Neighborville lights come in watts already, scaled with the sun (tools/environment.py).
@@ -656,8 +675,7 @@ class Importer:
         light.color = values.get('color', (1.0, 1.0, 1.0))
         if 'watts' in values:
             light.energy = min(float(values['watts']), 1000000.0)
-            # Hundreds of faint lamps would overflow EEVEE's shadow pool; only lights that matter cast shadows.
-            light.use_shadow = light.energy >= 1.0
+            light.use_shadow = light.energy >= 1.0  # faint lamps never cast shadows (see limit_shadows)
         else:
             light.energy = min(float(values.get('intensity', 10.0)) * 10.0, 100000.0)
         if kind == 'AREA':

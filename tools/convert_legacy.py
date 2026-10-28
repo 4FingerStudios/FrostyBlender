@@ -664,15 +664,31 @@ class LegacyConverter:
                 if child: self.marker_walk(marks, child[0], child[1], matrix, leaf, mode, stack, inside)
 
     # ---- spawn ----
+    def floor_bounds(self):
+        """World x/z bounds of every floor placement, as arrays, rebuilt when the floor list changes: a map has
+        tens of thousands, and the spawn search and markers probe the floor thousands of times."""
+        key = (id(self.floor), len(self.floor))
+        if getattr(self, '_floor_key', None) != key:
+            local = {}
+            lo, hi = np.empty((len(self.floor), 2)), np.empty((len(self.floor), 2))
+            for i, (rid, matrix) in enumerate(self.floor):
+                if rid not in local:
+                    positions = self.meshes[rid][2]
+                    a, b = positions.min(axis=0), positions.max(axis=0)
+                    local[rid] = np.array([[p, q, r] for p in (a[0], b[0]) for q in (a[1], b[1]) for r in (a[2], b[2])])
+                corners = local[rid] @ matrix[:3, :3].T + matrix[:3, 3]
+                lo[i], hi[i] = corners[:, [0, 2]].min(axis=0), corners[:, [0, 2]].max(axis=0)
+            self._floor_key, self._floor_boxes = key, (lo, hi)
+        return self._floor_boxes
+
     def floor_at(self, x, z, below=None):
         """The highest up-facing surface at x, z (with below, the highest no higher than that)."""
         best = None
-        for rid, matrix in self.floor:
+        lo, hi = self.floor_bounds()
+        under = np.nonzero((lo[:, 0] <= x) & (x <= hi[:, 0]) & (lo[:, 1] <= z) & (z <= hi[:, 1]))[0]
+        for i in under:
+            rid, matrix = self.floor[i]
             rel, mats, positions, triangles = self.meshes[rid]
-            lo, hi = positions.min(axis=0), positions.max(axis=0)
-            corners = np.array([[a, b, c] for a in (lo[0], hi[0]) for b in (lo[1], hi[1]) for c in (lo[2], hi[2])]) @ matrix[:3, :3].T + matrix[:3, 3]
-            lo, hi = corners.min(axis=0), corners.max(axis=0)
-            if not (lo[0] <= x <= hi[0] and lo[2] <= z <= hi[2]): continue
             world = positions @ matrix[:3, :3].T + matrix[:3, 3]
             a, b, c = world[triangles[:, 0]], world[triangles[:, 1]], world[triangles[:, 2]]
             den = (b[:, 2] - c[:, 2]) * (a[:, 0] - c[:, 0]) + (c[:, 0] - b[:, 0]) * (a[:, 2] - c[:, 2]); ok = np.abs(den) > 1e-8

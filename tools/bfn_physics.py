@@ -1,10 +1,11 @@
 """Battle for Neighborville collision: the game's own physics resources (a PhysicsAsset's .physics resource,
 resource type 0x41759364), read as collision meshes. Frostbite's physics here replaced Havok; layout (little
-endian, version 2 with no extra sections, which is most props and every static model group):
+endian, version 2, or 0 for a few movable props):
 
-    0x00  u32 version (2), u32 extra sections (0 here), u32 shape count, u32 instance count, u32 ?,
+    0x00  u32 version, u32 rigid body count, u32 shape count, u32 instance count, u32 ?,
           u32 total hull vertices, u32 total hull edge indices, u32 ?, u32 ?, u32 total hull faces, ...
-    0x30  shapes, 0x38 bytes each: a runtime pointer block, then at +0x28 u32 vertex count, edge index count,
+    0x30  rigid bodies, 0x50 bytes each (mass and inertia of movable parts; not needed for collision)
+          shapes, 0x38 bytes each: a runtime pointer block, then at +0x28 u32 vertex count, edge index count,
           face count
           (16-byte aligned)
           instances, 0x40 bytes each: f32 position xyz (w 1), f32 rotation quaternion xyzw, then f32 radius at
@@ -12,7 +13,7 @@ endian, version 2 with no extra sections, which is most props and every static m
           a capsule keeps its half length in the position's w and runs along its local Y
           hull vertices, f32 xyzw each, shape after shape
     then each hull's faces (8 bytes each) and edges (two u32 index lists), which the hull rebuilds from its
-    points instead.
+    points instead, and for model groups a per-instance table.
 
 Instances are in the owner's space: a static model's own, or for a static model group the group's.
 """
@@ -23,6 +24,7 @@ import struct
 import numpy as np
 
 PHYSICS_RESOURCE = 0x41759364
+BODY = 0x50  # a rigid body block (mass, inertia) of movable parts, before the instances
 SPHERE, CAPSULE = 0, 1
 HULLS = (2, 3)
 
@@ -126,14 +128,15 @@ def shapes(data):
     hull or one primitive size share a key, so their hull is built once."""
     if len(data) < 0x30:
         return None
-    version, extra, count, instances = struct.unpack_from('<4I', data, 0)
+    version, bodies, count, instances = struct.unpack_from('<4I', data, 0)
     total = struct.unpack_from('<I', data, 0x14)[0]
-    if version != 2 or extra != 0:
+    shapes_at = 0x30 + bodies * BODY
+    if version not in (0, 2) or bodies > 64 or shapes_at + count * 0x38 > len(data):
         return None
-    counts = [struct.unpack_from('<I', data, 0x30 + i * 0x38 + 0x28)[0] for i in range(count)]
+    counts = [struct.unpack_from('<I', data, shapes_at + i * 0x38 + 0x28)[0] for i in range(count)]
     if sum(counts) != total:
         return None
-    at = (0x30 + count * 0x38 + 15) & ~15
+    at = (shapes_at + count * 0x38 + 15) & ~15
     vertex_start = at + instances * 0x40
     if vertex_start + total * 16 > len(data):
         return None
@@ -176,8 +179,13 @@ def collision_sections(data):
         base += len(v)
     if not vertices:
         return None
-    pos = np.concatenate(vertices).astype(np.float32)
-    idx = np.concatenate(triangles).reshape(-1).astype(np.uint32)
+    return sections(np.concatenate(vertices), np.concatenate(triangles))
+
+
+def sections(vertices, triangles):
+    """One write_mesh section (named 'collision') from collision vertices and triangles."""
+    pos = np.asarray(vertices).astype(np.float32)
+    idx = np.asarray(triangles).reshape(-1).astype(np.uint32)
     tri = idx.reshape(-1, 3)
     normals = np.zeros_like(pos)
     face = np.cross(pos[tri[:, 1]] - pos[tri[:, 0]], pos[tri[:, 2]] - pos[tri[:, 0]])
