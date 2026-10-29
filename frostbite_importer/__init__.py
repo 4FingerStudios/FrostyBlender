@@ -612,10 +612,14 @@ def register():
     effects_ui.register()
     rig_tools.register()
     animations_ui.register()
-    bpy.app.timers.register(_apply_link, first_interval=1.0)
+    # Persistent: Blender drops other timers when it loads a file, so opening Blender by
+    # double-clicking a .blend would otherwise never start the app link.
+    bpy.app.timers.register(_apply_link, first_interval=1.0, persistent=True)
 
 
 def unregister():
+    if bpy.app.timers.is_registered(_apply_link):
+        bpy.app.timers.unregister(_apply_link)
     app_link.stop()
     animations_ui.unregister()
     rig_tools.unregister()

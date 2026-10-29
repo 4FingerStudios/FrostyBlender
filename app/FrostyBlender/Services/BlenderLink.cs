@@ -25,7 +25,8 @@ public sealed class BlenderLink
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FrostyBlender");
     public static string LinkFile => Path.Combine(Folder, "link.json");
 
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(4) };
+    // Local only: a system proxy or PAC script must never see 127.0.0.1 requests.
+    private readonly HttpClient _http = new(new HttpClientHandler { UseProxy = false }) { Timeout = TimeSpan.FromSeconds(4) };
 
     public LinkInfo? Info { get; private set; }
 

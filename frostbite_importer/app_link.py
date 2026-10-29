@@ -17,6 +17,7 @@ Requests must carry the X-FrostyBlender header and no Origin header, so a web pa
 browser cannot drive Blender. link.json (in %LOCALAPPDATA%/FrostyBlender) tells the app the
 port and where Blender's Python, the tools and the game folders are; it never holds the BFN key.
 """
+import errno
 import json
 import os
 import queue
@@ -29,6 +30,7 @@ from pathlib import Path
 import bpy
 
 DEFAULT_PORT = 24567
+PORT_TRIES = 64                # the link's own port and the ones after it, past reserved ranges
 _server = None
 _requests = queue.Queue()   # (job id, request) for the main thread
 _jobs = {}                  # job id -> {'state', 'message', 'kind'}
@@ -395,11 +397,19 @@ def start(port=DEFAULT_PORT):
     global _server
     if _server:
         return True
-    try:
-        _server = Server(('127.0.0.1', port), Handler)
-    except OSError as error:
-        print('FrostyBlender link: port %d unavailable (%s); another Blender may hold it' % (port, error))
-        _server = None
+    # Hyper-V, WSL and Docker reserve random port blocks (bind fails with access denied), so step
+    # past reserved ports; stop at one in use, which is another Blender holding the link.
+    for candidate in range(port, min(port + PORT_TRIES, 65536)):
+        try:
+            _server = Server(('127.0.0.1', candidate), Handler)
+            break
+        except OSError as error:
+            in_use = getattr(error, 'winerror', None) == 10048 or error.errno == errno.EADDRINUSE
+            print('FrostyBlender link: port %d unavailable (%s)%s' % (
+                candidate, error, '; another Blender may hold it' if in_use else ''))
+            if in_use:
+                break
+    if not _server:
         return False
     threading.Thread(target=_server.serve_forever, name='FrostyBlender link', daemon=True).start()
     if not bpy.app.timers.is_registered(tick):
