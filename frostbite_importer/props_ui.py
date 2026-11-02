@@ -207,7 +207,7 @@ class FROSTBITE_OT_props_import(bpy.types.Operator):
         _job.update(proc=subprocess.Popen(command, env=env, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)),
                     dir=job, start=time.time(), label='%s %s props' % (state.source, found['name']))
         state.status = 'Starting...'
-        bpy.app.timers.register(_poll, first_interval=1.0)
+        bpy.app.timers.register(_poll, first_interval=1.0, persistent=True)
         self.report({'INFO'}, 'Converting %d props into %s' % (len(chosen), job))
         return {'FINISHED'}
 
@@ -280,6 +280,8 @@ def register():
 
 
 def unregister():
+    if bpy.app.timers.is_registered(_poll):
+        bpy.app.timers.unregister(_poll)
     del bpy.types.Scene.frostbite_props
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

@@ -731,6 +731,8 @@
                     </StackPanel>
                   </Border>
                 </Grid>
+                <TextBlock TextWrapping="Wrap" FontWeight="SemiBold" Text="{Binding BlenderHelp}"
+                           IsVisible="{Binding !Connected}" />
                 <TextBlock TextWrapping="Wrap" Classes="muted"
                            Text="FrostyBlender finds Blender through the Frostbite Map Importer add-on. Install the add-on (Edit › Preferences › Get Extensions › Install from Disk), open Blender once, and keep it open to send imports. Game folders and the BFN key are set in the add-on's preferences." />
                 <Border Height="1" Background="{StaticResource Line}" IsVisible="{Binding LinkLoaded}" />

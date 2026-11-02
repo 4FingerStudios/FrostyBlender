@@ -262,7 +262,7 @@ class FROSTBITE_OT_npcs_import(bpy.types.Operator):
                     rig=state.rigged, cursor=state.spawn_at_cursor and context.scene.cursor.location.copy(),
                     pro=state.rigged and state.pro_rig)
         state.status = 'Starting...'
-        bpy.app.timers.register(_poll, first_interval=1.0)
+        bpy.app.timers.register(_poll, first_interval=1.0, persistent=True)
         self.report({'INFO'}, 'Converting %d NPC items into %s' % (len(items), job))
         return {'FINISHED'}
 
@@ -348,6 +348,8 @@ def register():
 
 
 def unregister():
+    if bpy.app.timers.is_registered(_poll):
+        bpy.app.timers.unregister(_poll)
     del bpy.types.Scene.frostbite_npcs
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

@@ -236,7 +236,7 @@ class FROSTBITE_OT_animations_import(bpy.types.Operator):
         _job.update(proc=subprocess.Popen(command, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)),
                     dir=job, start=time.time(), armature=armature.name, set_fps=state.set_fps)
         state.status = 'Starting...'
-        bpy.app.timers.register(_poll, first_interval=1.0)
+        bpy.app.timers.register(_poll, first_interval=1.0, persistent=True)
         self.report({'INFO'}, 'Decoding %d clips for %s' % (len(chosen), armature.name))
         return {'FINISHED'}
 
@@ -323,6 +323,8 @@ def register():
 
 
 def unregister():
+    if bpy.app.timers.is_registered(_poll):
+        bpy.app.timers.unregister(_poll)
     del bpy.types.Scene.frostbite_animations
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

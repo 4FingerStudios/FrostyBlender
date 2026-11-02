@@ -420,7 +420,7 @@ class Gw2Converter(Converter):
     def physics_collision(self, doc, obj):
         """The collision mesh of a static model's Havok physics (tools/gw2_physics.py), written once per resource;
         None when it has none or holds shapes the reader doesn't decode."""
-        data = self.archive.resolve(doc, obj.get('PhysicsData'))
+        data = obj.get('$body') or self.archive.resolve(doc, obj.get('PhysicsData'))
         asset = self.archive.resolve(data[0], data[1].get('Asset')) if data else None
         rid = ((asset[1].get('Resource') or {}).get('$resource')) if asset else None
         if not rid:
@@ -580,23 +580,27 @@ class Gw2Converter(Converter):
                             local = poses[part]
                         else:
                             local = poses[cursor].copy()
+                        body = None
                         if has_physics:
-                            if not authored and not gw1:
+                            if not gw1:
                                 index = int(bodies[cursor])
                                 assets = havok[1]['ExternalAssets']
                                 if index >= len(assets):
                                     raise ValueError('GW2 grouped body reference out of range')
                                 body = self.archive.resolve(havok[0], assets[index])
-                                if body:
+                                if body and not authored:
                                     local = local @ np.linalg.inv(matrix(body[1]['Transform']))
                             cursor += 1
+                            if not body:  # GW1 has no bodies per model, and some GW2 ones aren't in this level's data
+                                model = self.archive.resolve(doc, member.get('MemberType'))
+                                body = self.archive.resolve(model[0], model[1].get('PhysicsData')) if model else None
                         variations = member.get('InstanceObjectVariation', [])
                         selected = variations[i] if i < len(variations) else variation
                         enabled = member.get('InstanceEnabled', [])
                         if i < len(enabled) and not enabled[i]:
                             continue
                         identity = {'right':{'x':1},'up':{'y':1},'forward':{'z':1},'trans':{}}
-                        visit(doc, {'$type':'StaticModelEntityData', 'Mesh':member['MeshAsset'],
+                        visit(doc, {'$type':'StaticModelEntityData', 'Mesh':member['MeshAsset'], '$body':body,
                                     'Transform':identity}, transform @ matrix(obj['Transform']) @ local, source, stack, selected)
                         self.grouped_instances += 1
             elif kind in ('WaterEntityData', 'WaterInteractEntityData') and obj.get('Visible', True):
@@ -659,7 +663,7 @@ class Gw2Converter(Converter):
                 # the render triangles. Skinned objects move, so their bind pose makes no collider. The render
                 # triangles stay the floor the spawn search reads either way.
                 if rig_tags is None and not any(part in mesh[1].get('Name','').lower() for part in ('cloudsgeo','skydome','skybox','light_shadowmap')):
-                    physics = None if gw1 else self.physics_collision(doc, obj)
+                    physics = self.physics_collision(doc, obj)
                     places.append({'kind': 'frostbite_collision', 'name': 'GW2 static surface collider',
                                    'matrix': world.tolist(), 'tags': {'mesh': physics or path, 'level_instance': source,
                                                                    'profile': 'gw2',

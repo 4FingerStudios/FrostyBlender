@@ -417,7 +417,7 @@ class FROSTBITE_OT_cosmetics_import(bpy.types.Operator):
                     dir=job, start=time.time(), label='%s %s cosmetics' % (state.source, character.name),
                     rig=state.rigged, pro=state.rigged and state.pro_rig, game=state.source, character=character.id)
         state.status = 'Starting...'
-        bpy.app.timers.register(_poll, first_interval=1.0)
+        bpy.app.timers.register(_poll, first_interval=1.0, persistent=True)
         self.report({'INFO'}, 'Converting %d cosmetics into %s' % (len(items), job))
         return {'FINISHED'}
 
@@ -504,6 +504,8 @@ def register():
 
 
 def unregister():
+    if bpy.app.timers.is_registered(_poll):
+        bpy.app.timers.unregister(_poll)
     del bpy.types.Scene.frostbite_cosmetics
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

@@ -99,6 +99,7 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _linkLoaded;
     [ObservableProperty] private bool _connected;
     [ObservableProperty] private string _blenderStatus = "Looking for Blender…";
+    [ObservableProperty] private string _blenderHelp = "";
     [ObservableProperty] private bool _unrealConnected;
     [ObservableProperty] private string _unrealStatus = "Unreal isn't open";
     [ObservableProperty] private string _jobStatus = "";
@@ -369,7 +370,7 @@ public partial class MainViewModel : ObservableObject
         {
             if (!LinkLoaded)
                 throw new InvalidOperationException(
-                    "Install the Frostbite Map Importer add-on in Blender and open Blender once, then click Retry.");
+                    BlenderDiagnosis.Describe(null, BlenderDiagnosis.CountBlenders(), DateTime.Now).Help + " Then click Retry.");
             var result = await _discovery.Scan(section, Game, refresh);
             if (id != _scanId) return;
             _all = Build(section, result);
@@ -761,9 +762,9 @@ public partial class MainViewModel : ObservableObject
         var ping = await _link.Get("/ping");
         RefreshAddonConnection(ping);
         Connected = ping != null;
-        BlenderStatus = Connected
-            ? $"Blender {Str(ping, "blender_version")} connected"
-            : LinkLoaded ? "Blender isn't open" : "Add-on not set up yet";
+        var (offline, help) = Connected ? ("", "") : BlenderDiagnosis.Describe(_link.Info, BlenderDiagnosis.CountBlenders(), DateTime.Now);
+        BlenderStatus = Connected ? $"Blender {Str(ping, "blender_version")} connected" : offline;
+        BlenderHelp = help;
         if (!Connected) return;
         if (_job != null)
         {

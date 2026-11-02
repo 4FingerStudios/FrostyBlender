@@ -442,7 +442,7 @@ class FROSTBITE_OT_import_map(bpy.types.Operator):
         _job.update(proc=subprocess.Popen(command, env=env, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)),
                     dir=job, start=time.time())
         state.status = 'Starting...'
-        bpy.app.timers.register(_poll_job, first_interval=1.0)
+        bpy.app.timers.register(_poll_job, first_interval=1.0, persistent=True)
         self.report({'INFO'}, 'Converting %s into %s' % (entry.name, job))
         return {'FINISHED'}
 
@@ -618,6 +618,8 @@ def register():
 
 
 def unregister():
+    if bpy.app.timers.is_registered(_poll_job):
+        bpy.app.timers.unregister(_poll_job)
     if bpy.app.timers.is_registered(_apply_link):
         bpy.app.timers.unregister(_apply_link)
     app_link.stop()
