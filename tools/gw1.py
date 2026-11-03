@@ -190,15 +190,18 @@ def finish(game, output, inventory, resource_data=None, jobs=None):
             continue
         # Parsed now, so drop the archive reader's earlier complaint about this tree.
         inventory['errors'] = [e for e in inventory['errors'] if not (e.get('stage') == 'terrain' and e.get('name') == asset['name'])]
-        for tile in tree['tiles']:
-            item = chunks.get(tile['guid'], {})
-            if not tile['size'] or item.get('bytes') == tile['size']:
+        # A tile with many painted layers keeps the rest of its mask pages in an extra chunk.
+        wanted = [(tile['size'], tile['guid']) for tile in tree['tiles']]
+        wanted += [tile['extra'] for tile in tree['tiles'] if tile['extra']]
+        for size, guid in wanted:
+            item = chunks.get(guid, {})
+            if not size or item.get('bytes') == size:
                 continue
             try:
-                fetch(tile['guid'])
+                fetch(guid)
                 tiles += 1
             except (ValueError, OSError, struct.error) as error:
-                inventory['errors'].append({'name': tile['guid'], 'stage': 'terrain chunk', 'error': str(error)})
+                inventory['errors'].append({'name': guid, 'stage': 'terrain chunk', 'error': str(error)})
     print('GW1 terrain chunks:', tiles, flush=True)
     fetched = 0
     texture_jobs = []

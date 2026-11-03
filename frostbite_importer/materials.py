@@ -92,6 +92,10 @@ def build_material(mat, doc, image, game_shaders=False):
         from .water_materials import build
         build(mat, doc, image)
         return
+    if doc.get('surface') == 'terrain':
+        from .terrain_materials import build
+        build(mat, doc, image)
+        return
     if doc.get('surface') == 'decal':
         from .decal_materials import build
         build(mat, doc, image)

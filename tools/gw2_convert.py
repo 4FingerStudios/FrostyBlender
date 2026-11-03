@@ -4,8 +4,8 @@ import hashlib
 import struct
 from pathlib import Path
 import numpy as np
-from convert import Archive, Converter, matrix, read_attr, write_mesh, write_skin, skin_attrs
-from gw2_terrain import terrain_tree, tile_heights, height_section
+from convert import Archive, Converter, matrix, read_attr, write_mesh, write_skin, skin_attrs, png
+from gw2_terrain import terrain_tree, tile_heights, height_section, mask_pages, tile_masks, layer_textures
 from gw2_groups import group_instances, gw1_part_poses
 import environment
 import gw2_physics
@@ -345,6 +345,7 @@ class Gw2Converter(Converter):
         target.parent.mkdir(parents=True,exist_ok=True)
         target.write_text(json.dumps(content,indent=2),encoding='utf-8')
         self.materials['terrain:'+resource_id] = material
+        painted = self.terrain_layers(terrain, tree)
         result = []
         leaves = []
         # Tiles inherit heights they do not store from their nearest ancestor.
@@ -374,12 +375,101 @@ class Gw2Converter(Converter):
             vertices, triangles = write_mesh(self.assets/rel,[section])
             self.counts['vertices'] += vertices
             self.counts['triangles'] += triangles
-            self.meshes[('terrain',tile['guid'],rect_hash)] = (rel,[material])
+            surface = self.painted_terrain(painted, tile['rect'], resource_id, rect_hash) if painted else material
+            self.meshes[('terrain',tile['guid'],rect_hash)] = (rel,[surface])
             local = np.eye(4)
             local[:3,3] = centre
-            result.append((rel,material,local,tile['guid']))
+            result.append((rel,surface,local,tile['guid']))
         self.terrain_tiles += len(result)
         return result
+
+    def terrain_layers(self, terrain, tree):
+        """The terrain's painted layers: (pages, [{'index', 'base', 'normal'}] in layer order), or None.
+
+        Layer numbers come from the terrain's compiled shader names (<terrain>__0md_1md__3d__0 combines layers 0
+        and 1), their textures from the level's shader database, and the painted coverage from the mask pages."""
+        name = (terrain[1].get('Name') or '').lower()
+        indices = set()
+        for doc_name, (asset, _) in self.archive.documents.items():
+            if asset.get('root_type') == 'ShaderGraph' and name and doc_name.startswith(name + '__'):
+                parts = doc_name[len(name) + 2:].split('__')
+                if len(parts) >= 2 and parts[1] in ('2d', '3d'):
+                    indices.update(int(token[:-2]) for token in parts[0].split('_') if token[:-2].isdigit())
+        if len(indices) < 2:
+            return None
+        try:
+            pages = mask_pages(tree, lambda guid: self.archive.data(self.archive.chunks[guid]) if guid in self.archive.chunks else None)
+        except (ValueError, IndexError, struct.error):
+            pages = None
+        if not pages:
+            return None
+        # Shader databases all have resource id 0, so look them up by type.
+        databases = sorted((asset for asset in self.archive.assets
+                            if asset.get('resource_type') == 0x36f3f2c0 and 'bytes' in asset
+                            and asset.get('name', '').startswith(('levels/', '_pvz/levels/'))),
+                           key=lambda asset: -asset.get('bytes', 0))
+        groups = None
+        for asset in databases:
+            groups = layer_textures(self.archive.data(asset), len(indices))
+            if groups:
+                break
+        if not groups:
+            return None
+        layers = []
+        for index, paths in zip(sorted(indices), groups):
+            roles = {}
+            for path in paths:
+                found = self.archive.documents.get(path.lower())
+                if not found or found[0].get('root_type') != 'TextureAsset':
+                    continue
+                suffix = path.rsplit('_', 1)[-1].lower()
+                role = ('normal' if suffix in ('normal', 'n') else 'base' if suffix in ('color', 'col', 'd', 'tile', 'varb')
+                        else 'asm' if suffix == 'asm' else None)
+                if role and (role not in roles or suffix != 'varb'):
+                    try:
+                        texture = self.texture(found[0]['guid'])
+                    except OSError:  # not decoded
+                        texture = None
+                    if texture:
+                        roles[role] = texture
+            if 'base' not in roles:
+                return None
+            layers.append({'index': index, **roles})
+        return pages, layers
+
+    def painted_terrain(self, painted, rect, resource_id, rect_hash):
+        """A material for one terrain tile that paints its layers over the base layer by their coverage."""
+        pages, layers = painted
+        masks = tile_masks(pages, tuple(rect), {layer['index'] for layer in layers[1:]})
+        images = []
+        used = [layer['index'] for layer in layers[1:] if layer['index'] in masks and masks[layer['index']].max() > 1 / 255]
+        for start in range(0, len(used), 4):
+            group = used[start:start + 4]
+            side = masks[group[0]].shape[0]
+            rgba = np.zeros((side, side, 4), np.uint8)
+            for channel, index in enumerate(group):
+                rgba[..., channel] = np.round(masks[index] * 255)
+            # Image rows run from the tile's far edge (+z) down, so Blender's v grows with z.
+            rel = f'textures/frostbite/gw2_terrain_mask_{resource_id}_{rect_hash}_{start // 4}.png'
+            png(self.assets / rel, side, side, np.ascontiguousarray(rgba[::-1]).tobytes())
+            images.append({'path': rel, 'layers': group})
+        x0, z0, x1, _ = rect
+        # Unpainted tiles share one base-layer material.
+        material = f"materials/frostbite/gw2_terrain_{resource_id}_{rect_hash if used else 'base'}.json"
+        if not used and material in self.materials.values():
+            return material
+        self.materials['terrain:' + material] = material
+        content = {'format': 'aura-frostbite-material', 'version': 1, 'profile': 'gw2', 'surface': 'terrain',
+                   'name': 'GW2 terrain', 'textures': {k: v for k, v in layers[0].items() if k in ('base', 'normal', 'asm')},
+                   'layers': [layer for layer in layers if layer['index'] == layers[0]['index'] or layer['index'] in used],
+                   'masks': images, 'mask_rect': [float(x0), float(z0), float(x1 - x0)], 'uv_scale': .25,
+                   'double_sided': False, 'alpha_cutoff': -1,
+                   'surface_approximation': "Layers are blended by their painted coverage in layer order; the game's "
+                                            'height-based blending and per-layer tiling are not reproduced.'}
+        target = self.assets / material
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(content, indent=2), encoding='utf-8')
+        return material
 
     def floor_at(self, x, z, ceiling=float('inf')):
         heights = []

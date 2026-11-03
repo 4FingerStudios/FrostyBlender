@@ -893,6 +893,8 @@ def complete_texture_chunks(game, output, inventory, terrain_only=False, resourc
                 inventory['errors'].append({'name': asset['name'], 'stage': 'terrain', 'error': str(error)})
                 continue
             wanted.update(tile['guid'] for tile in tree['tiles'] if tile['size'])
+            # Tiles with many painted layers keep the rest of their mask pages in an extra chunk.
+            wanted.update(tile['extra'][1] for tile in tree['tiles'] if tile['extra'] and tile['extra'][0])
         elif terrain_only:
             continue
         elif asset.get('resource_type') == 0x6bde20ba:
