@@ -3,7 +3,8 @@
 The converter (tools/gw2_terrain.py) reads the painted coverage of each layer and writes it as mask images over
 the tile, four layers to an image. Here the layers' colour, normal and ASM maps are blended over the base layer
 in layer order, each by its coverage, and the result is shaded by "PVZ GW2 Generic" like the rest of the map.
-The game also blends by the layers' heights and tiles each layer at its own scale; neither is reproduced.
+Each layer repeats at the game's own scale ('scale', repeats per metre), and layers the game blends by height
+('height': which texture channel) get the game's sharpened edge.
 """
 from .gw2_materials import _Builder, group
 from .materials import placeholder
@@ -43,21 +44,35 @@ def build(mat, doc, image):
             for channel, index in zip(('Red', 'Green', 'Blue', 'Alpha'), entry['layers']):
                 masks[index] = node.outputs['Alpha'] if channel == 'Alpha' else channels[channel]
 
-    def texture(path, non_color, label):
+    def texture(path, non_color, label, at):
         img = image(path, non_color) if path else None
         if img is None:
             return None
         node = t.new('ShaderNodeTexImage', -1400, label=label, image=img)
-        t.set(node.inputs['Vector'], uv)
+        t.set(node.inputs['Vector'], at)
         return node
+
+    def channel(node, index):
+        if index == 3:
+            return node.outputs['Alpha']
+        return t.split(node, -1200)[('Red', 'Green', 'Blue')[index]]
 
     first = None
     colour = normal = normal_alpha = asm = None
     for layer in layers:
         index = layer.get('index', 0)
-        base = texture(layer.get('base'), False, f'Layer {index} colour')
-        nrm = texture(layer.get('normal'), True, f'Layer {index} normal')
-        surf = texture(layer.get('asm'), True, f'Layer {index} ASM')
+        # Each layer repeats at its own scale over world XZ; mesh UVs are (x, 1 - z) times uv_scale.
+        at = uv
+        if layer.get('scale'):
+            k = float(layer['scale']) / scale
+            remap = t.new('ShaderNodeVectorMath', -1600, label=f'Layer {index} tiling', operation='MULTIPLY_ADD')
+            remap.inputs[1].default_value = (k, k, 1)
+            remap.inputs[2].default_value = (0, 1 - k, 0)
+            t.set(remap.inputs[0], uv)
+            at = remap.outputs['Vector']
+        base = texture(layer.get('base'), False, f'Layer {index} colour', at)
+        nrm = texture(layer.get('normal'), True, f'Layer {index} normal', at)
+        surf = texture(layer.get('asm'), True, f'Layer {index} ASM', at)
         layer_colour = base.outputs['Color'] if base else (1, 1, 1, 1)
         layer_normal = nrm.outputs['Color'] if nrm else FLAT_NORMAL
         layer_normal_alpha = nrm.outputs['Alpha'] if nrm else 1.0
@@ -69,6 +84,13 @@ def build(mat, doc, image):
         cover = masks.get(index)
         if cover is None:
             continue
+        height = layer.get('height') or {}
+        source = {'base': base, 'normal': nrm, 'asm': surf}.get(height.get('texture'))
+        if source is not None:
+            # The game sharpens this layer's edge by its height: saturate((overlay(mask, h) - .5) * contrast).
+            contrast = float(height.get('contrast', 10))
+            sharp = t.mix(cover, channel(source, int(height.get('channel', 2))), 1.0, blend='OVERLAY', x=-1100)
+            cover = t.math('MULTIPLY_ADD', sharp, contrast, -.5 * contrast, x=-1050, clamp=True)
         colour = t.mix(colour, layer_colour, cover, x=-1000)
         normal = t.mix(normal, layer_normal, cover, x=-800)
         normal_alpha = t.math('MULTIPLY_ADD', t.math('SUBTRACT', layer_normal_alpha, normal_alpha, x=-900), cover,

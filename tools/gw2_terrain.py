@@ -253,6 +253,40 @@ def tile_masks(pages, rect, layers, largest=1024):
     return masks
 
 
+def scatter_meshes(visual):
+    """The meshes a terrain scatters, from its VisualResource: {scattering type identifier: mesh asset name}.
+
+    Each scatter mesh is a zero-terminated asset name ending in _Mesh, an 8-byte hash, 6 bytes, then the u32
+    identifier that TerrainMeshScatteringType.Identifier refers to, then its draw settings."""
+    import re
+    out = {}
+    for found in re.finditer(rb'[\x21-\x7e]{3,200}_Mesh\x00', visual):
+        at = found.end() + 8 + 6
+        if at + 4 <= len(visual):
+            identifier = struct.unpack_from('<I', visual, at)[0]
+            if identifier < 4096:
+                out.setdefault(identifier, found.group()[:-1].decode('ascii'))
+    return out
+
+
+def scatter_weights(masks, scatter_layers, painted):
+    """How much of each scattering layer shows: its coverage under the painted layers drawn above it.
+    masks is tile_masks(...) for every layer named; the base layer (painted[0]) covers everything."""
+    out = {}
+    for layer in scatter_layers:
+        if layer == painted[0]:
+            weight = np.ones_like(next(iter(masks.values())))
+        elif layer in masks:
+            weight = masks[layer].copy()
+        else:
+            continue
+        for above in painted:
+            if above > layer and above in masks:
+                weight *= 1 - masks[above]
+        out[layer] = weight
+    return out
+
+
 def layer_textures(shaderdb, layer_count):
     """Texture paths of each terrain layer in layer order, from the level's compiled shader database: [[path,
     ...], ...], or None. Each compiled terrain shader binds its layers' textures in ascending layer order, as
@@ -286,6 +320,264 @@ def layer_textures(shaderdb, layer_count):
     if not found:
         return None
     return [list(group) for _, group in found.most_common(1)[0][0]]
+
+
+def compositing_layers(shaderdb, layer_count):
+    """Each terrain layer as the game's compositing shader draws it, base layer first: [{'paths': texture paths,
+    'scale': repeats per metre, 'height': {'path', 'channel', 'contrast'} or None}, ...], or None.
+
+    The compositing shader bakes the painted layers into the terrain's virtual texture. Its masks 0, 1, ... weight
+    the layers after the base in layer order; each layer's textures are sampled at world XZ times a constant, and
+    some masks are sharpened by a texture channel: saturate((overlay(mask, channel) - 0.5) * contrast). The
+    shader that draws every layer of the terrain has layer_count - 1 masks; its texture registers are the slots of
+    a 152-byte-entry texture table (u32 slot, u32 0, 144-byte path). Reading it needs Windows' disassembler."""
+    tables = _texture_tables(shaderdb)
+    for at in _dxbc_shaders(shaderdb):
+        bindings = _bindings(shaderdb, at)
+        if 'texture_maskMap' not in bindings or 'texture_heightfieldAtlas' not in bindings:
+            continue
+        if any('virtualTexture' in name for name in bindings):
+            continue
+        registers = {bindings[name] for name in bindings if name.startswith('texture_Texture')}
+        table = tables.get(frozenset(registers))
+        if not table:
+            continue
+        text = _disassemble(shaderdb, at)
+        if text is None:
+            return None
+        scales, heights, weights = read_compositing(text, bindings['texture_maskMap'])
+        if sorted(weights) != list(range(layer_count)):
+            continue
+        out = []
+        for position in range(layer_count):
+            mine = sorted(weights[position])
+            found = [scales[r] for r in mine if r in scales]
+            height = heights.get(position - 1)
+            out.append({'paths': [table[r] for r in mine if r in table],
+                        'scale': max(set(found), key=found.count) if found else None,
+                        'height': height and {'path': table.get(height[0]), 'channel': height[1],
+                                              'contrast': height[2]}})
+        return out
+    return None
+
+
+def _texture_tables(shaderdb):
+    """The shader database's texture tables by their slots: {frozenset(slots): {slot: path}}, the commonest
+    table for each set of slots."""
+    import re
+    from collections import Counter
+    paths = [(m.start(), m.group().decode('ascii')) for m in re.finditer(rb'[A-Za-z_]+/[\x21-\x7e]{3,140}', shaderdb)]
+    runs, current = [], []
+    for at, path in paths:
+        if current and at - current[-1][0] == 152:
+            current.append((at, path))
+        else:
+            runs.append(current)
+            current = [(at, path)]
+    runs.append(current)
+    counts = Counter()
+    for run in runs:
+        if any('/terrain/' in path.lower() or '/trn_' in path.lower() for _, path in run):
+            entries = tuple((struct.unpack_from('<I', shaderdb, at - 8)[0], path) for at, path in run if at >= 8)
+            counts[entries] += 1
+    out = {}
+    for entries, _ in counts.most_common():
+        out.setdefault(frozenset(slot for slot, _ in entries), dict(entries))
+    return out
+
+
+def _dxbc_shaders(data):
+    at = data.find(b'DXBC')
+    while at >= 0:
+        yield at
+        at = data.find(b'DXBC', at + 4)
+
+
+def _bindings(data, at):
+    """A DXBC shader's resources by name: {name: register}."""
+    try:
+        count = struct.unpack_from('<I', data, at + 28)[0]
+        for i in range(min(count, 16)):
+            chunk = at + struct.unpack_from('<I', data, at + 32 + 4 * i)[0]
+            if data[chunk:chunk + 4] != b'RDEF':
+                continue
+            start = chunk + 8
+            _, _, bound, offset = struct.unpack_from('<4I', data, start)
+            out = {}
+            for k in range(min(bound, 256)):
+                name, _, _, _, _, register = struct.unpack_from('<6I', data, start + offset + 32 * k)
+                end = data.index(b'\0', start + name)
+                out[bytes(data[start + name:end]).decode('ascii', 'replace')] = register
+            return out
+    except (struct.error, ValueError):
+        pass
+    return {}
+
+
+def _disassemble(data, at):
+    try:
+        import ctypes
+        compiler = ctypes.WinDLL('d3dcompiler_47.dll')
+    except (ImportError, OSError, AttributeError):
+        return None
+    size = struct.unpack_from('<I', data, at + 24)[0]
+    blob = ctypes.c_void_p()
+    if compiler.D3DDisassemble(ctypes.c_char_p(bytes(data[at:at + size])), ctypes.c_size_t(size), 0, None,
+                               ctypes.byref(blob)):
+        return None
+    # ID3DBlob: GetBufferPointer and GetBufferSize follow IUnknown's three methods.
+    methods = ctypes.cast(ctypes.cast(blob, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))
+    release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(methods[2])
+    pointer = ctypes.WINFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)(methods[3])
+    length = ctypes.WINFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p)(methods[4])
+    text = ctypes.string_at(pointer(blob), length(blob)).decode('ascii', 'replace')
+    release(blob)
+    return text
+
+
+def read_compositing(text, mask_register):
+    """From a compositing shader's disassembly: ({texture register: repeats per metre}, {mask number: (texture
+    register, channel, contrast)} for masks sharpened by a texture channel, {layer position: {texture registers}}).
+
+    Layer weights are tracked through the blend: mask n weights the layer at position n + 1, and what is left
+    after every mask (the 'rest') weights the base layer, position 0. A texture belongs to the layer whose weight
+    it is multiplied by."""
+    import re
+    constants = {int(offset) // 16: name
+                 for name, offset in re.findall(r'float4 external_(\w+);\s*// Offset:\s+(\d+)', text)}
+    # What a register component holds: ('world', scale), ('mask uv', n), ('mask', n), ('rest',), ('accum',) or
+    # ('texture', register, channel).
+    value = {}
+    scales, heights, weights = {}, {}, {}
+    pending = None  # a sharpened mask whose contrast comes next
+
+    def operands(rest):
+        parts, depth, current = [], 0, ''
+        for ch in rest:
+            if ch == ',' and not depth:
+                parts.append(current.strip())
+                current = ''
+                continue
+            depth += ch == '('
+            depth -= ch == ')'
+            current += ch
+        return parts + [current.strip()] if current.strip() else parts
+
+    def split(operand):
+        name, _, swizzle = operand.lstrip('-|').rstrip('|').partition('.')
+        return name, swizzle
+
+    def source(operand, index):
+        name, swizzle = split(operand)
+        return value.get((name, swizzle[min(index, len(swizzle) - 1)])) if swizzle else None
+
+    def constant(operand):
+        found = re.match(r'cb\d+\[(\d+)\]', operand)
+        return constants.get(int(found.group(1)), '') if found else ''
+
+    def literal(operand):
+        return [float(v) for v in operand[2:-1].split(',')] if operand.startswith('l(') else None
+
+    def weight(found):
+        if found and found[0] == 'mask':
+            return found[1] + 1
+        if found and found[0] == 'rest':
+            return 0
+        return None
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith(('//', 'dcl_', 'ps_', 'vs_', 'cs_')):
+            continue
+        op, _, rest = line.partition(' ')
+        op = op.split('(')[0]
+        args = operands(rest)
+        if not args or not args[0][:1] in ('r', 'o'):
+            continue
+        dest, mask = split(args[0])
+        written = [(i, c) for i, c in enumerate('xyzw') if c in mask]
+        results = {}
+        if op == 'mad' and len(args) == 4 and constant(args[2]):
+            name = constant(args[2])
+            number = re.fullmatch(r'worldToMask(\d+)UvTransform', name)
+            for i, c in written:
+                if name == 'clipToWorldSpaceXzTransform' and args[1].startswith('v'):
+                    results[c] = ('world', 1.0)
+                elif number and (source(args[1], i) or ('',))[0] == 'world':
+                    results[c] = ('mask uv', int(number.group(1)))
+        elif op == 'mul' and len(args) == 3 and literal(args[2]) and any(
+                (source(args[1], i) or ('',))[0] == 'world' for i, _ in written):
+            factors = literal(args[2])
+            for i, c in written:
+                found = source(args[1], i)
+                if found and found[0] == 'world':
+                    results[c] = ('world', found[1] * factors[min(i, len(factors) - 1)])
+        elif op.startswith('sample') and len(args) >= 3:
+            texture, swizzle = split(args[2])
+            register = int(texture[1:]) if texture[1:].isdigit() else -1
+            first = source(args[1], 0)
+            if register == mask_register:
+                if first and first[0] == 'mask uv':
+                    for i, c in written:
+                        results[c] = ('mask', first[1])
+            else:
+                if first and first[0] == 'world':
+                    scales.setdefault(register, round(first[1], 6))
+                for i, c in written:
+                    results[c] = ('texture', register, 'xyzw'.index(swizzle[i]) if len(swizzle) == 4 else i)
+        elif op == 'dp2' and len(args) == 3 and {(source(args[1], 0) or ('',))[0], (source(args[2], 0) or ('',))[0]} == {'mask', 'texture'}:
+            # overlay(mask, h) below one half: 2 * mask * h
+            a, b = source(args[1], 0), source(args[2], 0)
+            m, t = (a, b) if a[0] == 'mask' else (b, a)
+            heights[m[1]] = (t[1], t[2], 10.0)
+            pending = m[1]
+            for i, c in written:
+                results[c] = m
+        else:
+            if op == 'mul_sat' and pending is not None and len(args) == 3 and literal(args[2]):
+                heights[pending] = heights[pending][:2] + (round(literal(args[2])[0], 4),)
+                pending = None
+            for i, c in written:
+                found = [source(arg, i) for arg in args[1:]]
+                kinds = {f[0] for f in found if f}
+                if op == 'add' and len(args) == 3 and literal(args[2]) and literal(args[2])[min(i, len(literal(args[2])) - 1)] == 1.0 \
+                        and args[1].startswith('-') and found[0] and found[0][0] == 'mask':
+                    results[c] = ('rest',)  # 1 - mask
+                elif op == 'mad' and len(args) == 4 and args[1].startswith('-') and args[2] == args[3] \
+                        and found[1] and found[1][0] in ('rest', 'mask'):
+                    results[c] = ('rest',) if found[1][0] == 'rest' else found[1]  # b * (1 - a)
+                elif op in ('mul', 'mad') and len(found) >= 2 and {f[0] for f in found[:2] if f} >= {'texture'} \
+                        and any(weight(f) is not None for f in found[:2])                         and (op == 'mul' or (found[2] or ('',))[0] == 'accum'):
+                    # weight * texture, or that added to the running total
+                    texture = next(f for f in found[:2] if f and f[0] == 'texture')
+                    weights.setdefault(next(weight(f) for f in found[:2] if weight(f) is not None),
+                                       set()).add(texture[1])
+                    results[c] = ('accum',)
+                elif op == 'mul' and kinds == {'mask', 'rest'}:
+                    results[c] = next(f for f in found if f[0] == 'mask')
+                elif 'mask' in kinds and 'accum' not in kinds:
+                    masks = {f[1] for f in found if f and f[0] == 'mask'}
+                    if len(masks) == 1:
+                        results[c] = ('mask', masks.pop())
+                elif 'rest' in kinds and 'accum' not in kinds:
+                    results[c] = ('rest',)
+                elif kinds == {'texture'} and len({f[1] for f in found if f}) == 1:
+                    results[c] = next(f for f in found if f)
+        for i, c in written:
+            if c in results:
+                value[(dest, c)] = results[c]
+            elif op == 'mov' and args[1].startswith('l(') and value.get((dest, c)) == ('accum',):
+                pass  # the else branch of an 'if this layer shows' zeroes the running total
+            else:
+                value.pop((dest, c), None)
+    return scales, heights, weights
+
+
+def texture_role(path):
+    """What a terrain layer texture is for, from its name: 'base', 'normal', 'asm' or None."""
+    suffix = path.rsplit('_', 1)[-1].lower()
+    return ('normal' if suffix in ('normal', 'n') else 'base' if suffix in ('color', 'col', 'd', 'tile', 'varb')
+            else 'asm' if suffix == 'asm' else None)
 
 
 def material_name(path):

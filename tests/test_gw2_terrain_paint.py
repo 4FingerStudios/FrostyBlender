@@ -6,7 +6,8 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from gw2_terrain import mask_tree, mask_pages, tile_masks, layer_textures, HEIGHT_PAGE, MASK_PAGE
+from gw2_terrain import (mask_tree, mask_pages, tile_masks, layer_textures, read_compositing, scatter_meshes,
+                         scatter_weights, HEIGHT_PAGE, MASK_PAGE)
 
 
 def quadrants(x, z, X, Z):
@@ -134,6 +135,68 @@ class LayerTextureChecks(unittest.TestCase):
 
     def test_no_shader_with_every_layer_gives_none(self):
         self.assertIsNone(layer_textures(shaderdb([self.FULL[2:]]), 3))
+
+
+# A cut-down terrain compositing shader as the D3D disassembler prints it: three layers, the third sharpened
+# by the blue channel of its second texture, then the base, second and third layers added up by their weights.
+COMPOSITING = """
+//   float4 external_clipToWorldSpaceXzTransform;// Offset:    0 Size:    16
+//   float4 external_worldToMask0UvTransform;// Offset:   16 Size:    16
+//   float4 external_worldToMask1UvTransform;// Offset:   32 Size:    16
+ps_5_0
+mad r0.xyzw, v1.xyxy, cb1[0].xyxy, cb1[0].zwzw
+mul r1.xyzw, r0.zwzw, l(0.150000, 0.150000, 0.500000, 0.500000)
+sample_indexable(texture2d)(float,float,float,float) r2.xyz, r1.xyxx, t4.xyzw, s3
+sample_indexable(texture2d)(float,float,float,float) r3.xyz, r1.zwzz, t5.xyzw, s3
+sample_indexable(texture2d)(float,float,float,float) r4.xyz, r1.xyxx, t6.xyzw, s3
+sample_indexable(texture2d)(float,float,float,float) r4.w, r1.xyxx, t7.wxyz, s3
+mad r5.xy, r0.zwzz, cb1[1].xyxx, cb1[1].zwzz
+sample_indexable(texture2d)(float,float,float,float) r5.z, r5.xyxx, t3.yzxw, s2
+mad r5.xy, r0.zwzz, cb1[2].xyxx, cb1[2].zwzz
+sample_indexable(texture2d)(float,float,float,float) r6.x, r5.xyxx, t3.xyzw, s2
+lt r6.y, r6.x, l(0.500000)
+dp2 r6.z, r4.wwww, r6.xxxx
+add r6.w, -r6.x, l(1.000000)
+movc r6.x, r6.y, r6.z, r6.w
+add r6.x, r6.x, l(-0.500000)
+mul_sat r6.x, r6.x, l(9.999998)
+add r7.x, -r6.x, l(1.000000)
+mul r7.y, r5.z, r7.x
+mad r7.z, -r5.z, r7.x, r7.x
+lt r7.w, l(0.010000), r7.z
+if_nz r7.w
+  mul r8.xyz, r2.xyzx, r7.zzzz
+else
+  mov r8.xyz, l(0,0,0,0)
+endif
+mad r8.xyz, r3.xyzx, r7.yyyy, r8.xyzx
+mad r8.xyz, r4.xyzx, r6.xxxx, r8.xyzx
+ret
+"""
+
+
+class CompositingChecks(unittest.TestCase):
+    def test_layers_get_their_tiling_textures_and_height_blend(self):
+        scales, heights, weights = read_compositing(COMPOSITING, 3)
+        self.assertEqual(scales, {4: .15, 5: .5, 6: .15, 7: .15})
+        self.assertEqual(weights, {0: {4}, 1: {5}, 2: {6}})
+        self.assertEqual(heights, {1: (7, 2, 10.0)})  # .w of the swizzle wxyz is the texture's blue
+
+
+class ScatterChecks(unittest.TestCase):
+    def test_scatter_meshes_by_identifier(self):
+        def entry(name, identifier):
+            return name.encode() + b'\0' + bytes(8) + bytes(6) + struct.pack('<I', identifier) + bytes(16)
+        data = bytes(40) + entry('art/terrain/leaves_Mesh', 0) + entry('worlds/grass/clump_Mesh', 3)
+        self.assertEqual(scatter_meshes(data), {0: 'art/terrain/leaves_Mesh', 3: 'worlds/grass/clump_Mesh'})
+
+    def test_painted_layers_above_hide_scatter_below(self):
+        masks = {1: np.full((2, 2), .5, np.float32), 2: np.array([[1, 0], [0, 0]], np.float32),
+                 9: np.full((2, 2), .25, np.float32)}
+        weights = scatter_weights(masks, [0, 1, 9], [0, 1, 2])
+        np.testing.assert_allclose(weights[1], [[0, .5], [.5, .5]])
+        np.testing.assert_allclose(weights[0], [[0, .5], [.5, .5]])  # the base shows where nothing is painted
+        np.testing.assert_allclose(weights[9], masks[9])  # a scatter-only layer above every painted one
 
 
 if __name__ == '__main__':

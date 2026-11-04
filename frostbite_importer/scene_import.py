@@ -74,11 +74,13 @@ def bone_names(bones):
 
 class Importer:
     def __init__(self, scene_path, assets, include_collision=False, group_by_level=True,
-                 add_lighting=True, report=print, rig=True, include_markers=True):
+                 add_lighting=True, report=print, rig=True, include_markers=True, include_scatter=True):
         self.scene_path = Path(scene_path)
         self.assets = Path(assets)
         self.include_collision = include_collision
         self.include_markers = include_markers
+        self.include_scatter = include_scatter
+        self.scatter_sources, self.scattered = None, 0
         self.marker_root, self.marker_groups = None, {}
         self.group_by_level = group_by_level
         self.add_lighting = add_lighting
@@ -422,6 +424,13 @@ class Importer:
                         collision_root.objects.link(ob)
                     else:
                         self.collection(root, tags.get('level_instance')).objects.link(ob)
+                        if self.include_scatter and tags.get('scatter') and doc.get('terrain_scatter_types'):
+                            from . import terrain_scatter
+                            try:
+                                self.scattered += terrain_scatter.add(self, ob, tags['scatter'],
+                                                                      doc['terrain_scatter_types'], root)
+                            except (KeyError, TypeError, ValueError, RuntimeError) as error:
+                                self.warnings.append('%s: terrain scatter not added: %s' % (ob.name, error))
                     count += 1
                 elif kind == 'spawn':
                     ob = bpy.data.objects.new(place.get('name', 'spawn'), None)
@@ -451,9 +460,10 @@ class Importer:
             space.clip_end = max(space.clip_end, 10000.0)
         if self.clip_length and context.scene.frame_end < self.clip_length:
             context.scene.frame_end = self.clip_length  # show at least one full loop of the map's clips
-        self.report({'INFO'}, 'Imported %d objects, %d meshes, %d materials in %.1fs%s%s' % (
+        self.report({'INFO'}, 'Imported %d objects, %d meshes, %d materials in %.1fs%s%s%s' % (
             count, len(self.meshes), len(self.materials), time.time() - start,
             '; %d skinned objects rigged, %d animated' % (self.rigged, self.animated) if self.rigged else '',
+            '; grass and leaves on %d terrain tiles' % self.scattered if self.scattered else '',
             '; %d warnings (see console)' % len(self.warnings) if self.warnings else ''))
         for warning in self.warnings[:200]:
             print('Frostbite import:', warning)

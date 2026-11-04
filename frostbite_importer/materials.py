@@ -88,6 +88,46 @@ def surface_group():
 
 
 def build_material(mat, doc, image, game_shaders=False):
+    _build_material(mat, doc, image, game_shaders)
+    if 'meshscatter' in doc.get('shader_name', '').lower() and mat.node_tree:
+        _terrain_tint(mat, doc)
+
+
+def _terrain_tint(mat, doc):
+    """Terrain scatter (grass, leaves) takes on the colour of the terrain under it, as the game's mesh scatter
+    shaders do by Terrain_Color_Blend. The colour comes from the terrain scatter modifier's instances
+    (terrain_scatter.py); anything else using the material keeps its own colour."""
+    tree = mat.node_tree
+    base = tree.nodes.active
+    if base is None or base.type != 'TEX_IMAGE':
+        return
+    targets = [link.to_socket for link in tree.links if link.from_socket == base.outputs['Color']]
+    if not targets:
+        return
+    blend = (doc.get('vectors') or {}).get('Terrain_Color_Blend', [.5])[0]
+    x, y = base.location
+    colour = tree.nodes.new('ShaderNodeAttribute')
+    colour.attribute_type, colour.attribute_name = 'INSTANCER', 'terrain_colour'
+    colour.location = (x, y + 260)
+    marked = tree.nodes.new('ShaderNodeAttribute')
+    marked.attribute_type, marked.attribute_name = 'INSTANCER', 'terrain_scatter'
+    marked.location = (x, y + 480)
+    amount = tree.nodes.new('ShaderNodeMath')
+    amount.operation = 'MULTIPLY'
+    amount.inputs[1].default_value = float(blend)
+    amount.location = (x + 200, y + 400)
+    tree.links.new(marked.outputs['Fac'], amount.inputs[0])
+    mix = tree.nodes.new('ShaderNodeMix')
+    mix.data_type, mix.label = 'RGBA', 'Terrain colour'
+    mix.location = (x + 380, y + 200)
+    tree.links.new(amount.outputs[0], mix.inputs['Factor'])
+    tree.links.new(base.outputs['Color'], mix.inputs['A'])
+    tree.links.new(colour.outputs['Color'], mix.inputs['B'])
+    for socket in targets:
+        tree.links.new(mix.outputs['Result'], socket)
+
+
+def _build_material(mat, doc, image, game_shaders=False):
     if doc.get('surface') == 'water':
         from .water_materials import build
         build(mat, doc, image)

@@ -5,7 +5,8 @@ import struct
 from pathlib import Path
 import numpy as np
 from convert import Archive, Converter, matrix, read_attr, write_mesh, write_skin, skin_attrs, png
-from gw2_terrain import terrain_tree, tile_heights, height_section, mask_pages, tile_masks, layer_textures
+from gw2_terrain import (terrain_tree, tile_heights, height_section, mask_pages, tile_masks, layer_textures,
+                         compositing_layers, texture_role, scatter_meshes, scatter_weights)
 from gw2_groups import group_instances, gw1_part_poses
 import environment
 import gw2_physics
@@ -185,6 +186,7 @@ class Gw2Converter(Converter):
         self.skipped_meshes = {}
         self.floor_meshes = {}
         self.terrain_tiles = 0
+        self.scatter_types = {}  # terrain scattering (grass, leaves): key -> mesh, materials, density, scale
         self.physics_meshes = {}  # Havok resource id -> collision mesh path, or None (tools/gw2_physics.py)
         self.grouped_instances = 0
         self.unplaced_group_instances = []
@@ -221,7 +223,8 @@ class Gw2Converter(Converter):
                 if override_graph:
                     graph_name = override_graph[1].get('Name', graph_name)
             parameters += [(selected[0], item) for item in selected_material.get('TextureParameters', [])]
-        cutoff = .5 if 'alphatest' in graph_name.lower() else -1
+        # Terrain scatter (grass, leaves) is cut out by its colour alpha too.
+        cutoff = .5 if 'alphatest' in graph_name.lower() or 'meshscatter' in graph_name.lower() else -1
         bindings = {}
         texture_asset_names = {}
         unresolved = []
@@ -235,7 +238,8 @@ class Gw2Converter(Converter):
                 unresolved.append(key)
         paths = {}
         # Garden Warfare 1 blend shaders name their first layer Material1_*.
-        for role, names in [('base', ('Color', 'Diffuse', 'BaseColor', 'Albedo', 'DiffuseTexture', 'Material1_Diffuse', 'PositiveDiffuse')),
+        # Garden Warfare 1 terrain scatter names its only texture just Texture.
+        for role, names in [('base', ('Color', 'Diffuse', 'BaseColor', 'Albedo', 'DiffuseTexture', 'Material1_Diffuse', 'PositiveDiffuse', 'Texture')),
                             ('normal', ('Normal', 'NormalMap', 'NormalTexture', 'Material1_Normal', 'PositiveNormal')),
                             ('mask', ('ASM', 'Mask', 'Specular')),
                             ('emissive', ('Emissive', 'EmissiveColor')),
@@ -308,8 +312,7 @@ class Gw2Converter(Converter):
         if resource is None:
             raise ValueError('GW2 terrain streaming resource unavailable')
         tree = terrain_tree(self.archive.data(resource))
-        # Terrain shaders combine many splat layers. Use an authored grass
-        # surface while retaining the actual heightfield, not a flat proxy.
+        # One authored grass surface, for tiles when the painted layers can't be read (terrain_layers).
         textures = {}
         for role, suffix in (('base','_color'), ('normal','_normal')):
             choices = [(name, asset) for name, (asset, doc) in self.archive.documents.items()
@@ -345,7 +348,16 @@ class Gw2Converter(Converter):
         target.parent.mkdir(parents=True,exist_ok=True)
         target.write_text(json.dumps(content,indent=2),encoding='utf-8')
         self.materials['terrain:'+resource_id] = material
-        painted = self.terrain_layers(terrain, tree)
+        try:
+            pages = mask_pages(tree, lambda guid: self.archive.data(self.archive.chunks[guid]) if guid in self.archive.chunks else None)
+        except (ValueError, IndexError, struct.error):
+            pages = None
+        painted = self.terrain_layers(terrain, pages) if pages else None
+        try:
+            scatter = self.terrain_scatter(terrain, pages, painted) if painted else None
+        except (OSError, ValueError, KeyError, IndexError, struct.error) as error:
+            self.errors.append({'stage': 'terrain scatter', 'name': terrain[1].get('Name', ''), 'error': str(error)})
+            scatter = None
         result = []
         leaves = []
         # Tiles inherit heights they do not store from their nearest ancestor.
@@ -376,14 +388,15 @@ class Gw2Converter(Converter):
             self.counts['vertices'] += vertices
             self.counts['triangles'] += triangles
             surface = self.painted_terrain(painted, tile['rect'], resource_id, rect_hash) if painted else material
+            spread = self.scatter_masks(scatter, tile['rect'], resource_id, rect_hash) if scatter else None
             self.meshes[('terrain',tile['guid'],rect_hash)] = (rel,[surface])
             local = np.eye(4)
             local[:3,3] = centre
-            result.append((rel,surface,local,tile['guid']))
+            result.append((rel,surface,local,tile['guid'],spread))
         self.terrain_tiles += len(result)
         return result
 
-    def terrain_layers(self, terrain, tree):
+    def terrain_layers(self, terrain, pages):
         """The terrain's painted layers: (pages, [{'index', 'base', 'normal'}] in layer order), or None.
 
         Layer numbers come from the terrain's compiled shader names (<terrain>__0md_1md__3d__0 combines layers 0
@@ -395,36 +408,35 @@ class Gw2Converter(Converter):
                 parts = doc_name[len(name) + 2:].split('__')
                 if len(parts) >= 2 and parts[1] in ('2d', '3d'):
                     indices.update(int(token[:-2]) for token in parts[0].split('_') if token[:-2].isdigit())
-        if len(indices) < 2:
-            return None
-        try:
-            pages = mask_pages(tree, lambda guid: self.archive.data(self.archive.chunks[guid]) if guid in self.archive.chunks else None)
-        except (ValueError, IndexError, struct.error):
-            pages = None
-        if not pages:
+        if len(indices) < 2 or not pages:
             return None
         # Shader databases all have resource id 0, so look them up by type.
         databases = sorted((asset for asset in self.archive.assets
                             if asset.get('resource_type') == 0x36f3f2c0 and 'bytes' in asset
                             and asset.get('name', '').startswith(('levels/', '_pvz/levels/'))),
                            key=lambda asset: -asset.get('bytes', 0))
-        groups = None
+        drawn = None
         for asset in databases:
-            groups = layer_textures(self.archive.data(asset), len(indices))
-            if groups:
+            data = self.archive.data(asset)
+            # The compositing shader says which textures, tiling and height blend each layer has. Without the
+            # shader disassembler, fall back to the texture table that lists every layer (Garden Warfare 2).
+            drawn = compositing_layers(data, len(indices))
+            if drawn is None:
+                groups = layer_textures(data, len(indices))
+                drawn = groups and [{'paths': paths} for paths in groups]
+            if drawn:
                 break
-        if not groups:
+        if not drawn:
             return None
         layers = []
-        for index, paths in zip(sorted(indices), groups):
-            roles = {}
-            for path in paths:
+        for index, layer_drawn in zip(sorted(indices), drawn):
+            roles, colour = {}, None
+            for path in layer_drawn['paths']:
                 found = self.archive.documents.get(path.lower())
                 if not found or found[0].get('root_type') != 'TextureAsset':
                     continue
                 suffix = path.rsplit('_', 1)[-1].lower()
-                role = ('normal' if suffix in ('normal', 'n') else 'base' if suffix in ('color', 'col', 'd', 'tile', 'varb')
-                        else 'asm' if suffix == 'asm' else None)
+                role = texture_role(path)
                 if role and (role not in roles or suffix != 'varb'):
                     try:
                         texture = self.texture(found[0]['guid'])
@@ -432,10 +444,127 @@ class Gw2Converter(Converter):
                         texture = None
                     if texture:
                         roles[role] = texture
+                        if role == 'base':
+                            colour = self.texture_colour(found[0]['guid'])
             if 'base' not in roles:
                 return None
-            layers.append({'index': index, **roles})
+            layer = {'index': index, **roles}
+            if colour:
+                layer['colour'] = colour
+            if layer_drawn.get('scale'):
+                layer['scale'] = layer_drawn['scale']
+            height = layer_drawn.get('height')
+            role = height and texture_role(height['path'] or '')
+            if role and role in roles:
+                layer['height'] = {'texture': role, 'channel': height['channel'], 'contrast': height['contrast']}
+            layers.append(layer)
         return pages, layers
+
+    def texture_colour(self, guid):
+        """A decoded texture's average colour (sRGB 0..1), or None."""
+        found = self.archive.by_guid.get(guid)
+        resource = found and found[1]['objects'][0].get('Resource', {}).get('$resource')
+        info = self.texture_info.get(resource) if resource else None
+        if not info:
+            return None
+        try:
+            raw = (self.texdir / info['path']).read_bytes()
+        except OSError:
+            return None
+        pixels = np.frombuffer(raw, np.uint8, offset=8).reshape(-1, 4)
+        return [round(float(v) / 255, 4) for v in pixels[::max(1, len(pixels) // 65536), :3].mean(axis=0)]
+
+    def terrain_scatter(self, terrain, pages, painted):
+        """The grass, leaves and stones the game scatters over the terrain: {'pages', 'painted': layer numbers,
+        'layers': {layer: [scatter type key]}}, or None. The types themselves go to self.scatter_types.
+
+        TerrainData lists each layer's TerrainMeshScatteringTypes (density, scale); the terrain's VisualResource
+        names the mesh of each type. The game places them at run time, so positions are random here."""
+        doc = terrain[0]
+        visual_id = terrain[1].get('VisualResource', {}).get('$resource')
+        visual = self.archive.resources.get(visual_id) if visual_id else None
+        if visual is None:
+            return None
+        meshes = scatter_meshes(self.archive.data(visual))
+        layers = {}
+        for index, pointer in enumerate(terrain[1].get('TerrainLayers', [])):
+            layer = self.archive.resolve(doc, pointer)
+            for ref in (layer[1].get('MeshScatteringTypes', []) if layer else []):
+                kind = self.archive.resolve(doc, ref)
+                if not kind or kind[1].get('Identifier') not in meshes:
+                    continue
+                key = self.scatter_type(kind[1], meshes[kind[1]['Identifier']])
+                if key:
+                    layers.setdefault(index, []).append(key)
+        if not layers:
+            return None
+        return {'pages': pages, 'painted': [layer['index'] for layer in painted[1]], 'layers': layers,
+                'colours': {layer['index']: layer['colour'] for layer in painted[1] if layer.get('colour')}}
+
+    def scatter_type(self, kind, mesh_name):
+        """One scattering type as a scene entry; returns its key, or None if its mesh can't be converted."""
+        found = self.archive.documents.get(mesh_name.lower())
+        if not found or found[0].get('root_type') != 'RigidMeshAsset':
+            return None
+        key = hashlib.sha256((mesh_name + json.dumps(kind, sort_keys=True, default=str)).encode()).hexdigest()[:12]
+        if key in self.scatter_types:
+            return key
+        mesh_doc = found[1]
+        try:
+            rel, materials = self.convert_static((mesh_doc, mesh_doc['objects'][0]), 0)
+        except (OSError, ValueError, KeyError, IndexError, struct.error) as error:
+            self.errors.append({'stage': 'terrain scatter mesh', 'name': mesh_name, 'error': str(error)})
+            return None
+        density = kind.get('Density', {})
+        def pair(value, default):
+            return [float(value.get('x', default)), float(value.get('y', default))] if isinstance(value, dict) else [default, default]
+        self.scatter_types[key] = {
+            'name': mesh_name.rsplit('/', 1)[-1], 'mesh': rel, 'materials': materials,
+            # Instances per square metre at full coverage (the game's high quality setting).
+            'density': float(density.get('High', density.get('Ultra', 0)) if isinstance(density, dict) else density or 0),
+            'min_scale': pair(kind.get('MinScale'), 1.0), 'max_scale': pair(kind.get('MaxScale'), 1.0)}
+        return key
+
+    def scatter_masks(self, scatter, rect, resource_id, rect_hash):
+        """Where each scattering layer shows on one tile, as mask images: [{'path', 'channels': [[type keys], ...]}]
+        plus the tile rect, or None when nothing is scattered here."""
+        wanted = set(scatter['layers']) | set(scatter['painted'])
+        masks = tile_masks(scatter['pages'], tuple(rect), wanted)
+        if not masks:
+            return None
+        weights = scatter_weights(masks, sorted(scatter['layers']), scatter['painted'])
+        used = [layer for layer in sorted(weights) if weights[layer].max() > 1 / 255]
+        images = []
+        for start in range(0, len(used), 4):
+            group = used[start:start + 4]
+            side = weights[group[0]].shape[0]
+            rgba = np.zeros((side, side, 4), np.uint8)
+            for channel, layer in enumerate(group):
+                rgba[..., channel] = np.round(weights[layer] * 255)
+            rel = f'textures/frostbite/gw2_terrain_scatter_{resource_id}_{rect_hash}_{start // 4}.png'
+            png(self.assets / rel, side, side, np.ascontiguousarray(rgba[::-1]).tobytes())
+            images.append({'path': rel, 'channels': [scatter['layers'][layer] for layer in group]})
+        if not images:
+            return None
+        x0, z0, x1, _ = rect
+        spread = {'masks': images, 'mask_rect': [float(x0), float(z0), float(x1 - x0)], 'uv_scale': .25}
+        colours = scatter['colours']
+        if scatter['painted'][0] in colours:
+            # The game tints scattered grass with the terrain colour under it: the layers' average colours,
+            # painted over each other like the layers themselves.
+            first = next(iter(masks.values()))
+            colour = np.ones(first.shape + (3,), np.float32) * np.array(colours[scatter['painted'][0]], np.float32)
+            for layer in scatter['painted'][1:]:
+                if layer in masks and layer in colours:
+                    m = masks[layer][..., None]
+                    colour = colour * (1 - m) + np.array(colours[layer], np.float32) * m
+            side = colour.shape[0]
+            rgba = np.full((side, side, 4), 255, np.uint8)
+            rgba[..., :3] = np.round(np.clip(colour, 0, 1) * 255)
+            rel = f'textures/frostbite/gw2_terrain_colour_{resource_id}_{rect_hash}.png'
+            png(self.assets / rel, side, side, np.ascontiguousarray(rgba[::-1]).tobytes())
+            spread['colour'] = rel
+        return spread
 
     def painted_terrain(self, painted, rect, resource_id, rect_hash):
         """A material for one terrain tile that paints its layers over the base layer by their coverage."""
@@ -464,8 +593,9 @@ class Gw2Converter(Converter):
                    'layers': [layer for layer in layers if layer['index'] == layers[0]['index'] or layer['index'] in used],
                    'masks': images, 'mask_rect': [float(x0), float(z0), float(x1 - x0)], 'uv_scale': .25,
                    'double_sided': False, 'alpha_cutoff': -1,
-                   'surface_approximation': "Layers are blended by their painted coverage in layer order; the game's "
-                                            'height-based blending and per-layer tiling are not reproduced.'}
+                   'surface_approximation': 'Layers are blended by their painted coverage in layer order, each at '
+                                            "the game's tiling and sharpened by height where the game does; the "
+                                            "terrain-wide colour map isn't reproduced."}
         target = self.assets / material
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(content, indent=2), encoding='utf-8')
@@ -707,10 +837,12 @@ class Gw2Converter(Converter):
                 if terrain is None:
                     raise ValueError('GW2 terrain asset unresolved')
                 world = transform @ matrix(obj['Transform'])
-                for path,material,local,guid in self.convert_terrain(terrain):
+                for path,material,local,guid,spread in self.convert_terrain(terrain):
                     placement = world @ local
                     tags = {'mesh':path,'material_0':material,'source':terrain[1].get('Name',''),
                             'source_level':source,'level_instance':source,'profile':'gw2','terrain_chunk':guid}
+                    if spread:
+                        tags['scatter'] = spread
                     places.append({'kind':'frostbite_mesh','name':'GW2 terrain tile','matrix':placement.tolist(),
                                    'tags':tags,'values':{'collision':0}})
                     places.append({'kind':'frostbite_collision','name':'GW2 terrain collider','matrix':placement.tolist(),
@@ -831,11 +963,14 @@ class Gw2Converter(Converter):
                   'limitations': ['Installed base archives and patch deltas; static environment conversion.',
                                   'Static environment and material texture bindings; shaders use Aura approximations.',
                                   'Collision is generated from render triangles, not native Havok physics.',
-                                  'Terrain heightfields are translated; native terrain splat layers, holes and scatter vegetation are not yet translated.',
+                                  'Terrain heightfields, painted layers and scattered grass are translated (scatter positions are random, at the game density); holes are not.',
                                   'Water exports a bounded plane and native shader sidecars; Blender approximates the surface without game wave simulation.',
                                   'Skinned map objects are rigged and loop their default clip; characters and original gameplay are not translated.',
                                   'Gameplay markers cover spawns, teleporters, purchase spots and vehicles; capture points and bomb sites are placed by game logic at run time and are left out.']}
-        return {'format': 'aura-frostbite-scene', 'version': 1, 'name': 'GW2_' + map_name, 'places': places}, report
+        scene = {'format': 'aura-frostbite-scene', 'version': 1, 'name': 'GW2_' + map_name, 'places': places}
+        if self.scatter_types:
+            scene['terrain_scatter_types'] = self.scatter_types
+        return scene, report
 
 
 def main():
