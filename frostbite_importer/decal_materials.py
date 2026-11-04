@@ -1,5 +1,6 @@
 """Alpha-blended decal surfaces ('surface': 'decal'): Battle for Neighborville decal volumes,
-projected onto the map by the converter (tools/bfn_decals.py)."""
+projected onto the map by the converter (tools/bfn_decals.py), and Garden Warfare terrain decals such as
+roads (tools/terrain_decals.py)."""
 import bpy
 
 from .game_materials import _Nodes
@@ -20,7 +21,8 @@ def build(mat, doc, image):
     mat.diffuse_color = tint
     t = _Nodes(mat)
     uv = t.new('ShaderNodeUVMap', -900)
-    tex = t.new('ShaderNodeTexImage', -650, label='Decal colour', extension='CLIP')
+    # Decal volumes show their texture once; terrain decals (roads) repeat it along their length.
+    tex = t.new('ShaderNodeTexImage', -650, label='Decal colour', extension=doc.get('texture_extension', 'CLIP'))
     tex.image = image(doc.get('textures', {}).get('base'), False)
     t.link(uv.outputs['UV'], tex.inputs['Vector'])
     color = t.mix(tex.outputs['Color'], tint, 1, 'MULTIPLY', x=-350)

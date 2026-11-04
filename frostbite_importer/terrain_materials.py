@@ -4,7 +4,8 @@ The converter (tools/gw2_terrain.py) reads the painted coverage of each layer an
 the tile, four layers to an image. Here the layers' colour, normal and ASM maps are blended over the base layer
 in layer order, each by its coverage, and the result is shaded by "PVZ GW2 Generic" like the rest of the map.
 Each layer repeats at the game's own scale ('scale', repeats per metre), and layers the game blends by height
-('height': which texture channel) get the game's sharpened edge.
+('height': which texture channel) get the game's sharpened edge. Where the terrain has a colour map
+('colour_map', over the tile), the result is multiplied by twice its colour, as in the game: mid-grey is neutral.
 """
 from .gw2_materials import _Builder, group
 from .materials import placeholder
@@ -27,13 +28,14 @@ def build(mat, doc, image):
     # Mesh UVs are world (x, 1 - z) times uv_scale; the masks span the tile, with v growing with z.
     scale = float(doc.get('uv_scale', .25))
     masks = {}
-    if doc.get('masks'):
+    to_tile = None
+    if doc.get('mask_rect') and (doc.get('masks') or doc.get('colour_map')):
         x0, z0, width = doc['mask_rect']
         to_tile = t.new('ShaderNodeVectorMath', -2000, label='Tile coordinates', operation='MULTIPLY_ADD')
         to_tile.inputs[1].default_value = (1 / (scale * width), -1 / (scale * width), 1)
         to_tile.inputs[2].default_value = (-x0 / width, (1 / scale - z0) / width, 0)
         t.set(to_tile.inputs[0], uv)
-        for entry in doc['masks']:
+        for entry in doc.get('masks', []):
             img = image(entry['path'], True)
             if img is None:
                 continue
@@ -96,6 +98,18 @@ def build(mat, doc, image):
         normal_alpha = t.math('MULTIPLY_ADD', t.math('SUBTRACT', layer_normal_alpha, normal_alpha, x=-900), cover,
                               normal_alpha, x=-800)
         asm = t.mix(asm, layer_asm, cover, x=-600)
+
+    tint = image(doc['colour_map'], True) if to_tile and doc.get('colour_map') else None
+    if tint is not None:
+        node = t.new('ShaderNodeTexImage', -800, label='Terrain colour map', image=tint, extension='EXTEND')
+        t.set(node.inputs['Vector'], to_tile.outputs['Vector'])
+        tinted = t.new('ShaderNodeVectorMath', -500, label='Colour map tint', operation='MULTIPLY')
+        t.set(tinted.inputs[0], colour)
+        t.set(tinted.inputs[1], node.outputs['Color'])
+        doubled = t.new('ShaderNodeVectorMath', -350, label='Twice (mid-grey is neutral)', operation='SCALE')
+        t.set(doubled.inputs[0], tinted.outputs['Vector'])
+        doubled.inputs['Scale'].default_value = 2
+        colour = doubled.outputs['Vector']
 
     node = t.new('ShaderNodeGroup', -100)
     node.node_tree = group()

@@ -6,10 +6,12 @@ from pathlib import Path
 import numpy as np
 from convert import Archive, Converter, matrix, read_attr, write_mesh, write_skin, skin_attrs, png
 from gw2_terrain import (terrain_tree, tile_heights, height_section, mask_pages, tile_masks, layer_textures,
+                         colour_pages, tile_colour,
                          compositing_layers, texture_role, scatter_meshes, scatter_weights)
 from gw2_groups import group_instances, gw1_part_poses
 import environment
 import gw2_physics
+import terrain_decals
 
 
 SPAWNS = ('PVZCharacterSpawnReferenceObjectData', 'AlternateSpawnEntityData', 'VehicleSpawnReferenceObjectData')
@@ -55,6 +57,12 @@ class Gw2Archive(Archive):
                 doc = LazyDocument(self.root / asset['document'])
                 self.documents[asset['name']] = (asset, doc)
                 self.by_guid[asset.get('guid') or doc['guid']] = (asset, doc)
+
+
+def resize(image, side):
+    """A square image resampled (nearest) to side x side."""
+    pick = np.minimum((np.arange(side) + .5) * image.shape[0] // side, image.shape[0] - 1).astype(int)
+    return image[pick][:, pick]
 
 
 def light_values(obj):
@@ -348,10 +356,17 @@ class Gw2Converter(Converter):
         target.parent.mkdir(parents=True,exist_ok=True)
         target.write_text(json.dumps(content,indent=2),encoding='utf-8')
         self.materials['terrain:'+resource_id] = material
+        def chunk(guid):
+            return self.archive.data(self.archive.chunks[guid]) if guid in self.archive.chunks else None
         try:
-            pages = mask_pages(tree, lambda guid: self.archive.data(self.archive.chunks[guid]) if guid in self.archive.chunks else None)
+            pages = mask_pages(tree, chunk)
         except (ValueError, IndexError, struct.error):
             pages = None
+        try:
+            tint = colour_pages(tree, chunk)
+        except (ValueError, IndexError, struct.error) as error:
+            self.errors.append({'stage': 'terrain colour map', 'name': terrain[1].get('Name', ''), 'error': str(error)})
+            tint = []
         painted = self.terrain_layers(terrain, pages) if pages else None
         try:
             scatter = self.terrain_scatter(terrain, pages, painted) if painted else None
@@ -387,8 +402,16 @@ class Gw2Converter(Converter):
             vertices, triangles = write_mesh(self.assets/rel,[section])
             self.counts['vertices'] += vertices
             self.counts['triangles'] += triangles
-            surface = self.painted_terrain(painted, tile['rect'], resource_id, rect_hash) if painted else material
-            spread = self.scatter_masks(scatter, tile['rect'], resource_id, rect_hash) if scatter else None
+            colour = self.colour_map(tint, tile['rect'], resource_id, rect_hash)
+            if painted:
+                surface = self.painted_terrain(painted, tile['rect'], resource_id, rect_hash, colour)
+            elif colour and textures.get('base'):
+                # Layers that can't be read: the one grass surface, still tinted by the colour map.
+                surface = self.painted_terrain((None, [dict(textures, index=0)]), tile['rect'], resource_id,
+                                               rect_hash, colour)
+            else:
+                surface = material
+            spread = self.scatter_masks(scatter, tile['rect'], resource_id, rect_hash, colour) if scatter else None
             self.meshes[('terrain',tile['guid'],rect_hash)] = (rel,[surface])
             local = np.eye(4)
             local[:3,3] = centre
@@ -525,7 +548,21 @@ class Gw2Converter(Converter):
             'min_scale': pair(kind.get('MinScale'), 1.0), 'max_scale': pair(kind.get('MaxScale'), 1.0)}
         return key
 
-    def scatter_masks(self, scatter, rect, resource_id, rect_hash):
+    def colour_map(self, pages, rect, resource_id, rect_hash):
+        """The terrain colour map over one tile: (image path, (side, side, 3) colour 0..1), or None where it is
+        neutral (mid-grey) or the terrain has none."""
+        colour = tile_colour(pages, tuple(rect)) if pages else None
+        if colour is None or np.abs(colour - .5).max() < 2 / 255:
+            return None
+        side = colour.shape[0]
+        rgba = np.full((side, side, 4), 255, np.uint8)
+        rgba[..., :3] = np.round(colour * 255)
+        rel = f'textures/frostbite/gw2_terrain_tint_{resource_id}_{rect_hash}.png'
+        png(self.assets / rel, side, side, np.ascontiguousarray(rgba[::-1]).tobytes())
+        self.counts['terrain_tinted'] = self.counts.get('terrain_tinted', 0) + 1
+        return rel, colour
+
+    def scatter_masks(self, scatter, rect, resource_id, rect_hash, tint=None):
         """Where each scattering layer shows on one tile, as mask images: [{'path', 'channels': [[type keys], ...]}]
         plus the tile rect, or None when nothing is scattered here."""
         wanted = set(scatter['layers']) | set(scatter['painted'])
@@ -558,6 +595,9 @@ class Gw2Converter(Converter):
                 if layer in masks and layer in colours:
                     m = masks[layer][..., None]
                     colour = colour * (1 - m) + np.array(colours[layer], np.float32) * m
+            if tint is not None:
+                # ... times twice the terrain colour map, as the terrain itself.
+                colour = colour * 2 * resize(tint[1], colour.shape[0])
             side = colour.shape[0]
             rgba = np.full((side, side, 4), 255, np.uint8)
             rgba[..., :3] = np.round(np.clip(colour, 0, 1) * 255)
@@ -566,10 +606,11 @@ class Gw2Converter(Converter):
             spread['colour'] = rel
         return spread
 
-    def painted_terrain(self, painted, rect, resource_id, rect_hash):
-        """A material for one terrain tile that paints its layers over the base layer by their coverage."""
+    def painted_terrain(self, painted, rect, resource_id, rect_hash, tint=None):
+        """A material for one terrain tile that paints its layers over the base layer by their coverage, tinted by
+        the terrain colour map (tint, from colour_map) where it has one."""
         pages, layers = painted
-        masks = tile_masks(pages, tuple(rect), {layer['index'] for layer in layers[1:]})
+        masks = tile_masks(pages, tuple(rect), {layer['index'] for layer in layers[1:]}) if pages else {}
         images = []
         used = [layer['index'] for layer in layers[1:] if layer['index'] in masks and masks[layer['index']].max() > 1 / 255]
         for start in range(0, len(used), 4):
@@ -584,8 +625,8 @@ class Gw2Converter(Converter):
             images.append({'path': rel, 'layers': group})
         x0, z0, x1, _ = rect
         # Unpainted tiles share one base-layer material.
-        material = f"materials/frostbite/gw2_terrain_{resource_id}_{rect_hash if used else 'base'}.json"
-        if not used and material in self.materials.values():
+        material = f"materials/frostbite/gw2_terrain_{resource_id}_{rect_hash if used or tint else 'base'}.json"
+        if not used and not tint and material in self.materials.values():
             return material
         self.materials['terrain:' + material] = material
         content = {'format': 'aura-frostbite-material', 'version': 1, 'profile': 'gw2', 'surface': 'terrain',
@@ -594,16 +635,19 @@ class Gw2Converter(Converter):
                    'masks': images, 'mask_rect': [float(x0), float(z0), float(x1 - x0)], 'uv_scale': .25,
                    'double_sided': False, 'alpha_cutoff': -1,
                    'surface_approximation': 'Layers are blended by their painted coverage in layer order, each at '
-                                            "the game's tiling and sharpened by height where the game does; the "
-                                            "terrain-wide colour map isn't reproduced."}
+                                            "the game's tiling and sharpened by height where the game does, then "
+                                            "tinted by the terrain colour map."}
+        if tint:
+            content['colour_map'] = tint[0]
         target = self.assets / material
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(content, indent=2), encoding='utf-8')
         return material
 
-    def floor_at(self, x, z, ceiling=float('inf')):
+    def floor_at(self, x, z, ceiling=float('inf'), geometry=None):
+        """The highest floor under (x, z): of every collision surface so far, or of geometry [(mesh, transform)]."""
         heights = []
-        for path, transform in self.collision_geometry:
+        for path, transform in (self.collision_geometry if geometry is None else geometry):
             if path not in self.floor_meshes:
                 raw = (self.assets / path).read_bytes()
                 header = struct.unpack_from('<16I6f', raw)
@@ -837,6 +881,7 @@ class Gw2Converter(Converter):
                 if terrain is None:
                     raise ValueError('GW2 terrain asset unresolved')
                 world = transform @ matrix(obj['Transform'])
+                tiles = []
                 for path,material,local,guid,spread in self.convert_terrain(terrain):
                     placement = world @ local
                     tags = {'mesh':path,'material_0':material,'source':terrain[1].get('Name',''),
@@ -849,6 +894,19 @@ class Gw2Converter(Converter):
                                    'tags':{'mesh':path,'level_instance':source,'profile':'gw2','collision_source':'heightfield'},
                                    'values':{'collision':1}})
                     self.collision_geometry.append((path,placement))
+                    tiles.append((path,placement))
+                # Roads, road lines and puddles laid over the terrain, which they never sink below.
+                def ground(x, z, world=world, tiles=tiles):
+                    at = world @ np.array([x, 0, z, 1.0])
+                    return self.floor_at(at[0], at[2], geometry=tiles) - world[1, 3]
+                try:
+                    for path, material in terrain_decals.convert(self, terrain, ground):
+                        places.append({'kind': 'frostbite_mesh', 'name': 'GW2 terrain decal', 'matrix': world.tolist(),
+                                       'tags': {'mesh': path, 'material_0': material, 'source': terrain[1].get('Name', ''),
+                                                'source_level': source, 'level_instance': source, 'profile': 'gw2'},
+                                       'values': {'collision': 0}})
+                except (OSError, ValueError, IndexError, struct.error) as error:
+                    self.errors.append({'stage': 'terrain decals', 'name': terrain[1].get('Name', ''), 'error': str(error)})
             elif kind in ('StaticModelEntityData', 'DynamicModelEntityData', 'MeshProxyEntityData') and obj.get('Visible', True):
                 mesh = self.archive.resolve(doc, obj.get('Mesh'))
                 if not mesh:

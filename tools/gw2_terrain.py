@@ -101,10 +101,92 @@ def terrain_tree(data):
 
 
 # A tile chunk concatenates the layers that tile stores: an optional height
-# page (133x133 u16 plus a trailer), optional 130x130 two-byte pages and
-# 66x66 one-byte mask pages. Tiles store heights only where they add detail;
-# the rest, and samples written as 0, come from the nearest ancestor.
+# page (133x133 u16 plus a trailer), its 66x66 one-byte mask pages, then an
+# optional colour page (260x260 BC1, raster 2). Tiles store heights only where
+# they add detail; the rest, and samples written as 0, come from the nearest ancestor.
 HEIGHT_PAGE, WIDE_PAGE, MASK_PAGE = 37759, 33800, 4356
+COLOUR_SIDE, COLOUR_BORDER = 260, 2
+
+
+def has_colour_page(length, mask_bytes, side=None):
+    """Whether a tile chunk of this length ends in a colour page, given the bytes of its mask pages."""
+    rest = length - mask_bytes - WIDE_PAGE
+    return rest == 0 or rest == HEIGHT_PAGE or (side is not None and rest == side * side * 2)
+
+
+def bc1(data, width, height):
+    """BC1 (DXT1) blocks as (height, width, 3) uint8 RGB."""
+    bx, by = width // 4, height // 4
+    blocks = np.frombuffer(data, '<u2', bx * by * 4).reshape(by, bx, 4)
+
+    def rgb565(v):
+        v = v.astype(np.uint32)
+        return np.stack([(v >> 11) * 255 / 31, ((v >> 5) & 63) * 255 / 63, (v & 31) * 255 / 31], -1)
+    c0, c1 = rgb565(blocks[..., 0]), rgb565(blocks[..., 1])
+    four = (blocks[..., 0] > blocks[..., 1])[..., None]
+    palette = np.stack([c0, c1, np.where(four, (2 * c0 + c1) / 3, (c0 + c1) / 2),
+                        np.where(four, (c0 + 2 * c1) / 3, 0)], 2)
+    bits = blocks[..., 2].astype(np.uint32) | (blocks[..., 3].astype(np.uint32) << 16)
+    index = (bits[..., None] >> (2 * np.arange(16, dtype=np.uint32))) & 3
+    pixels = np.take_along_axis(palette, index[..., None].repeat(3, -1).astype(np.intp), 2)
+    pixels = pixels.reshape(by, bx, 4, 4, 3).transpose(0, 2, 1, 3, 4).reshape(by * 4, bx * 4, 3)
+    return np.round(pixels).clip(0, 255).astype(np.uint8)
+
+
+def colour_pages(tree, chunk):
+    """The terrain-wide colour map (raster 2) as [(rect, 260x260x3 uint8)], coarse and fine pages alike; [] when
+    the terrain has none. The game multiplies the painted terrain by twice this colour, so mid-grey is neutral."""
+    if 2 not in tree['rasters'] or tree.get('endian', '<') != '<':
+        return []
+    groups = dict(mask_tree(tree['rasters'].get(1, b'')) or [])
+    side = tree['samples'] * 2 + 1
+    out = []
+    for tile in tree['tiles']:
+        if not tile['size']:
+            continue
+        data = chunk(tile['guid'])
+        masks = len(groups.get(tuple(tile['rect']), [])) * MASK_PAGE
+        if data is None or not has_colour_page(len(data), masks, side):
+            continue
+        out.append((tuple(tile['rect']), bc1(data[len(data) - WIDE_PAGE:], COLOUR_SIDE, COLOUR_SIDE)))
+    return out
+
+
+def tile_colour(pages, rect, largest=256):
+    """The colour map over one tile rect, from the finest pages that cover each point: (side, side, 3) float 0..1
+    with rows along z, or None where no page covers it."""
+    x0, z0, x1, z1 = rect
+    touching = [(r, page) for r, page in pages if r[0] < x1 and r[2] > x0 and r[1] < z1 and r[3] > z0]
+    if not touching:
+        return None
+    inner = COLOUR_SIDE - 2 * COLOUR_BORDER
+    texel = min(r[2] - r[0] for r, _ in touching) / inner
+    side = int(min(largest, max(8, round((x1 - x0) / texel))))
+    centres = (np.arange(side) + .5) * ((x1 - x0) / side)
+    out = np.full((side, side, 3), .5, np.float32)
+    for r, page in sorted(touching, key=lambda item: item[0][0] - item[0][2]):
+        _resample(page.astype(np.float32) / 255, r, x0 + centres, z0 + centres, out, inner, COLOUR_BORDER)
+    return out
+
+
+def _resample(page, rect, xs, zs, out, inner, border):
+    """Bilinearly samples a bordered page over rect at the points xs (columns), zs (rows) into out."""
+    px, pz, pX, pZ = rect
+    cols = np.flatnonzero((xs >= px) & (xs < pX))
+    rows = np.flatnonzero((zs >= pz) & (zs < pZ))
+    if not len(cols) or not len(rows):
+        return
+    last = page.shape[0] - 2
+    u = (xs[cols] - px) / (pX - px) * inner + border - .5
+    v = (zs[rows] - pz) / (pZ - pz) * inner + border - .5
+    u0 = np.clip(np.floor(u).astype(int), 0, last)
+    v0 = np.clip(np.floor(v).astype(int), 0, last)
+    fu, fv = (u - u0)[None, :], (v - v0)[:, None]
+    if page.ndim == 3:
+        fu, fv = fu[..., None], fv[..., None]
+    a, b = page[v0][:, u0], page[v0][:, u0 + 1]
+    c, d = page[v0 + 1][:, u0], page[v0 + 1][:, u0 + 1]
+    out[np.ix_(rows, cols)] = (a * (1 - fu) + b * fu) * (1 - fv) + (c * (1 - fu) + d * fu) * fv
 
 
 def mask_tree(raster):
@@ -202,7 +284,10 @@ def mask_pages(tree, chunk):
             if data is not None and len(data) < size:
                 return None
             if data is not None:
-                read(data, len(data) - size, rect)
+                # A colour page, when the tile has one, follows the mask pages.
+                side = tree['samples'] * 2 + 1 if 'samples' in tree else None
+                end = len(data) - (WIDE_PAGE if has_colour_page(len(data), size, side) else 0)
+                read(data, end - size, rect)
         if tile['children'] or not tile['extra'] or not tile['extra'][0]:
             continue
         deep = [node for node in reversed(order) if inside(node, rect)]
@@ -236,20 +321,8 @@ def tile_masks(pages, rect, layers, largest=1024):
     centres = (np.arange(side) + .5) * (width / side)
     xs, zs = x0 + centres, z0 + centres
     masks = {layer: np.zeros((side, side), np.float32) for layer in layers}
-    for layer, (px, pz, pX, pZ), page in sorted(touching, key=lambda item: item[1][0] - item[1][2]):
-        cols = np.flatnonzero((xs >= px) & (xs < pX))
-        rows = np.flatnonzero((zs >= pz) & (zs < pZ))
-        if not len(cols) or not len(rows):
-            continue
-        u = (xs[cols] - px) / (pX - px) * 64 + .5
-        v = (zs[rows] - pz) / (pZ - pz) * 64 + .5
-        u0 = np.clip(np.floor(u).astype(int), 0, 64)
-        v0 = np.clip(np.floor(v).astype(int), 0, 64)
-        fu, fv = (u - u0)[None, :], (v - v0)[:, None]
-        p = page.astype(np.float32) / 255
-        a, b = p[v0][:, u0], p[v0][:, u0 + 1]
-        c, d = p[v0 + 1][:, u0], p[v0 + 1][:, u0 + 1]
-        masks[layer][np.ix_(rows, cols)] = (a * (1 - fu) + b * fu) * (1 - fv) + (c * (1 - fu) + d * fu) * fv
+    for layer, rect, page in sorted(touching, key=lambda item: item[1][0] - item[1][2]):
+        _resample(page.astype(np.float32) / 255, rect, xs, zs, masks[layer], 64, 1)
     return masks
 
 
@@ -595,9 +668,11 @@ def has_height_page(size, side, endian='<'):
 
 
 def tile_heights(raw, tile, tree, parent=None):
-    """Raw u16 heights over the tile's 129x129 samples (0 = none), or None.
+    """Raw u16 heights over the tile's 129x129 samples (0 = a hole), or None.
 
-    parent is the (heights, rect) of the nearest ancestor, used to fill gaps.
+    parent is the (heights, rect) of the nearest ancestor, for tiles that store no heights. A tile's own 0 samples
+    are holes in the terrain (cave and tunnel mouths): its ancestors fill them with a flat floor for distant
+    views, and only the finest tile cuts them.
     """
     side = tree['samples'] * 2 + 1
     own = None
@@ -623,11 +698,7 @@ def tile_heights(raw, tile, tree, parent=None):
         inherited = (a*(1-tx) + b*tx)*(1-tz) + (c*(1-tx) + d*tx)*tz
         # Interpolating towards a missing (0) sample is not a height.
         inherited[(np.minimum(np.minimum(a, b), np.minimum(c, d)) == 0)] = 0
-    if own is None:
-        return inherited
-    if inherited is not None:
-        own = np.where(own == 0, inherited, own)
-    return own
+    return inherited if own is None else own
 
 
 def height_section(raw, tile, tree, parent=None, heights=None):
