@@ -625,6 +625,12 @@ class Importer:
                 self.fog(context, world, values['fog_color'], start, end, peak)
             except (AttributeError, RuntimeError, KeyError, TypeError) as error:
                 self.warnings.append('fog not set up: %s' % error)
+        if any(values.get(k) for k in ('grade_lut', 'grade_brightness', 'grade_contrast', 'grade_saturation')):
+            try:
+                self.grade(context, values.get('grade_lut'), values.get('grade_environment', ''),
+                           values.get('grade_brightness'), values.get('grade_contrast'), values.get('grade_saturation'))
+            except (AttributeError, RuntimeError, KeyError, TypeError, OSError) as error:
+                self.warnings.append('colour grade not set up: %s' % error)
         world['frostbite_environment'] = values.get('environment', '')
 
     def fog(self, context, world, color, start, end, peak):
@@ -662,6 +668,129 @@ class Importer:
         tree.links.new(mix.outputs['Result'], target)
         layers.location, amount.location, mix.location, output.location = (-400, 0), (-150, 150), (50, 0), (300, 0)
         scene['frostbite_fog'] = 'Compositor: %s, fog %.0f-%.0f m' % (tree.name, start, end)
+
+    def grade(self, context, rel, source='', brightness=None, contrast=None, saturation=None):
+        """The level's colour grade (tools/environment.py grade): a compositor step after the fog. Brightness
+        multiplies, contrast stretches about mid-grey and saturation pushes away from the luminance, per channel as
+        the game's colour correction does; then each pixel is looked up in the game's 3D grading table (rel, may
+        be None), unwrapped into an image of side-by-side blue slices. The game grades the tonemapped picture;
+        here it runs on the sRGB-encoded render before Blender's view transform, so it shows the grade's hue and
+        contrast shifts rather than matching the game exactly. The 'Grade strength' node fades it."""
+        image = self.image(rel, True) if rel else None
+        if rel and image is None:
+            raise OSError('colour grade table missing: ' + rel)
+        n = image.size[1] if image else 0
+        scene = context.scene
+        if hasattr(scene, 'compositing_node_group'):  # Blender 5
+            tree = scene.compositing_node_group
+            if tree is None:
+                tree = bpy.data.node_groups.new('Frostbite grade', 'CompositorNodeTree')
+                tree.interface.new_socket('Image', in_out='OUTPUT', socket_type='NodeSocketColor')
+                scene.compositing_node_group = tree
+            output = next((nd for nd in tree.nodes if nd.type == 'GROUP_OUTPUT'), None) or tree.nodes.new('NodeGroupOutput')
+            target = output.inputs[0]
+        else:  # Blender 4.x
+            scene.use_nodes = True
+            tree = scene.node_tree
+            output = next((nd for nd in tree.nodes if nd.type == 'COMPOSITE'), None) or tree.nodes.new('CompositorNodeComposite')
+            target = output.inputs['Image']
+        feeding = next((lk.from_socket for lk in tree.links if lk.to_socket == target), None)
+        if feeding is None:
+            feeding = tree.nodes.new('CompositorNodeRLayers').outputs['Image']
+        nodes, link = tree.nodes, tree.links.new
+        x0 = output.location.x
+        output.location.x += 1800
+
+        def node(kind, x, y, label=''):
+            nd = nodes.new(kind)
+            nd.location = (x0 + x, y)
+            if label:
+                nd.label = label
+            return nd
+
+        def math(op, a, b=None, x=0, y=0):
+            nd = node('ShaderNodeMath', x, y)
+            nd.operation = op
+            for i, v in enumerate((a, b)):
+                if isinstance(v, bpy.types.NodeSocket):
+                    link(v, nd.inputs[i])
+                elif v is not None:
+                    nd.inputs[i].default_value = v
+            return nd.outputs[0]
+
+        frame = node('NodeFrame', 0, 300, 'Colour grade: ' + (source.rsplit('/', 1)[-1] or 'game'))
+        encode = node('ShaderNodeGamma', 100, 0)
+        encode.inputs['Gamma'].default_value = 1 / 2.2
+        link(feeding, encode.inputs['Color'])
+        graded = encode.outputs['Color']
+
+        def vector(op, a, b=None, c=None, x=0, y=0):
+            nd = node('ShaderNodeVectorMath', x, y)
+            nd.operation = op
+            for i, v in enumerate((a, b, c)):
+                if isinstance(v, bpy.types.NodeSocket):
+                    link(v, nd.inputs[i])
+                elif v is not None:
+                    nd.inputs[i].default_value = v
+            return nd.outputs['Value' if op == 'DOT_PRODUCT' else 'Vector']
+        if brightness:
+            graded = vector('MULTIPLY', graded, tuple(brightness), x=100, y=-250)
+        if contrast:
+            graded = vector('MULTIPLY_ADD', graded, tuple(contrast), tuple(.5 - .5 * c for c in contrast), x=180, y=-250)
+        if saturation:
+            luma = vector('DOT_PRODUCT', graded, (.2126, .7152, .0722), x=180, y=-420)
+            grey = vector('SCALE', (1.0, 1.0, 1.0), None, None, x=260, y=-420)
+            link(luma, grey.node.inputs['Scale'])
+            graded = vector('MULTIPLY_ADD', vector('SUBTRACT', graded, grey, x=260, y=-250), tuple(saturation), grey, x=260, y=-250)
+        if image is None:
+            decode = node('ShaderNodeGamma', 2260, 0)
+            decode.inputs['Gamma'].default_value = 2.2
+            link(graded, decode.inputs['Color'])
+            return self._grade_fade(scene, tree, node, link, feeding, decode.outputs['Color'], target, source)
+        rgb = node('ShaderNodeSeparateXYZ', 260, 0)
+        link(graded, rgb.inputs[0])
+        r, g, b = (math('MULTIPLY', math('MINIMUM', math('MAXIMUM', rgb.outputs[i], 0.0, 380, -i * 160), 1.0, 520, -i * 160),
+                        n - 1, 660, -i * 160) for i in range(3))
+        low = math('FLOOR', b, None, 800, -320)
+        high = math('MINIMUM', math('ADD', low, 1.0, 940, -380), n - 1, 1080, -380)
+        v = math('DIVIDE', math('ADD', g, .5, 800, -160), n, 940, -160)
+        lut = node('CompositorNodeImage', 1080, 250)
+        lut.image = image
+        looked = []
+        for i, slice_ in enumerate((low, high)):
+            # Column: the blue slice times n plus red; texel centres sit half a texel in.
+            column = math('ADD', math('MULTIPLY', slice_, n, 1220, -500 - i * 160), r, 1360, -500 - i * 160)
+            u = math('DIVIDE', math('ADD', column, .5, 1500, -500 - i * 160), n * n, 1640, -500 - i * 160)
+            uv = node('ShaderNodeCombineXYZ', 1780, -300 - i * 200)
+            link(u, uv.inputs['X'])
+            link(v, uv.inputs['Y'])
+            uv.inputs['Z'].default_value = 1.0  # Map UV takes the third component as alpha
+            pick = node('CompositorNodeMapUV', 1940, 100 - i * 220)
+            link(lut.outputs['Image'], pick.inputs['Image'])
+            link(uv.outputs['Vector'], pick.inputs['UV'])
+            looked.append(pick.outputs['Image'])
+        between = node('ShaderNodeMix', 2100, 0)
+        between.data_type = 'RGBA'
+        link(math('SUBTRACT', b, low, 940, -500), between.inputs['Factor'])
+        link(looked[0], between.inputs['A'])
+        link(looked[1], between.inputs['B'])
+        decode = node('ShaderNodeGamma', 2260, 0)
+        decode.inputs['Gamma'].default_value = 2.2
+        link(between.outputs['Result'], decode.inputs['Color'])
+        self._grade_fade(scene, tree, node, link, feeding, decode.outputs['Color'], target, source)
+
+    @staticmethod
+    def _grade_fade(scene, tree, node, link, feeding, graded, target, source):
+        """Blend the graded picture over the ungraded one by the 'Grade strength' value."""
+        strength = node('ShaderNodeValue', 2260, 200, 'Grade strength')
+        strength.outputs[0].default_value = 1.0
+        fade = node('ShaderNodeMix', 2420, 0)
+        fade.data_type = 'RGBA'
+        link(strength.outputs[0], fade.inputs['Factor'])
+        link(feeding, fade.inputs['A'])
+        link(graded, fade.inputs['B'])
+        link(fade.outputs['Result'], target)
+        scene['frostbite_grade'] = 'Compositor: %s, %s' % (tree.name, source.rsplit('/', 1)[-1])
 
     def limit_shadows(self, root):
         """Hundreds of shadowed lamps (map lights and the lights of placed effects) overflow EEVEE's shadow pool:

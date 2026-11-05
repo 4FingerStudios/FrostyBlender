@@ -127,6 +127,66 @@ def _terrain_tint(mat, doc):
         tree.links.new(mix.outputs['Result'], socket)
 
 
+def _mixer(mat):
+    """node(kind, x, y, **settings) and mix(a, b, factor, x, y, label) for colour mixes; values or sockets."""
+    nodes, link = mat.node_tree.nodes, mat.node_tree.links.new
+
+    def node(kind, x, y, **settings):
+        n = nodes.new(kind)
+        n.location = (x, y)
+        for key, value in settings.items():
+            setattr(n, key, value)
+        return n
+
+    def mix(a, b, factor, x, y, label=''):
+        m = node('ShaderNodeMix', x, y, data_type='RGBA', label=label)
+        for socket, value in (('A', a), ('B', b), ('Factor', factor)):
+            if isinstance(value, bpy.types.NodeSocket):
+                link(value, m.inputs[socket])
+            else:
+                m.inputs[socket].default_value = value
+        return m.outputs['Result']
+    return node, mix
+
+
+def quadrant_colour(mat, quadrants, uvmap, x, y):
+    """Of four colours Q1..Q4, the one for the UV quadrant a point lies in (u <= 0, Frostbite v <= 1): a socket,
+    or the colour itself when all four agree. Battle for Neighborville prop tints and decal colours use it."""
+    node, mix = _mixer(mat)
+    link = mat.node_tree.links.new
+    q1, q2, q3, q4 = (tuple(c) for c in quadrants)
+    if len({q1, q2, q3, q4}) == 1:
+        return q1
+    uv = node('ShaderNodeSeparateXYZ', x, y)
+    link(uvmap.outputs['UV'], uv.inputs[0])
+    left = node('ShaderNodeMath', x + 150, y + 70, operation='LESS_THAN')
+    link(uv.outputs['X'], left.inputs[0])
+    left.inputs[1].default_value = 1e-5                      # u <= 0
+    top = node('ShaderNodeMath', x + 150, y - 70, operation='GREATER_THAN')
+    link(uv.outputs['Y'], top.inputs[0])
+    top.inputs[1].default_value = -1e-5                      # Frostbite v <= 1 (Blender's V is flipped)
+    return mix(mix(q3, q4, left.outputs[0], x + 300, y - 150), mix(q1, q2, left.outputs[0], x + 300, y + 50),
+               top.outputs[0], x + 450, y - 30, 'Colour by UV quadrant')
+
+
+def _prop_tint(mat, colours, uvmap, normal, target):
+    """Battle for Neighborville prop tints (tools/convert_legacy.py bfn_tint): the colour of the UV quadrant
+    (u <= 0, Frostbite v <= 1: Q1..Q4) where the normal texture's alpha is white, Tint_Color2 where it is black."""
+    link = mat.node_tree.links.new
+    _, mix = _mixer(mat)
+    q1 = tuple(colours['quadrants'][0])
+    colour = quadrant_colour(mat, colours['quadrants'], uvmap, -700, 450)
+    if colours.get('masked') and normal is not None:
+        colour = mix(tuple(colours.get('unmasked', (1, 1, 1, 1))), colour, normal.outputs['Alpha'], -100, 300,
+                     'Tint mask (normal alpha)')
+    if isinstance(colour, bpy.types.NodeSocket):
+        link(colour, target)
+    else:
+        target.default_value = colour
+    # Solid view shows the main tint.
+    mat.diffuse_color = q1
+
+
 def _build_material(mat, doc, image, game_shaders=False):
     if doc.get('surface') == 'water':
         from .water_materials import build
@@ -139,6 +199,10 @@ def _build_material(mat, doc, image, game_shaders=False):
     if doc.get('surface') == 'decal':
         from .decal_materials import build
         build(mat, doc, image)
+        return
+    if doc.get('surface') == 'prop_decal':
+        from .decal_materials import build_prop
+        build_prop(mat, doc, image)
         return
     if doc.get('profile') == 'gw1' or doc.get('shader_name', '').lower().startswith('_pvz/shaders/'):
         from .gw1_materials import build
@@ -195,6 +259,8 @@ def _build_material(mat, doc, image, game_shaders=False):
     link(normal.outputs['Color'], gin['Normal Color'])
     link(normal.outputs['Alpha'], gin['Normal Alpha'])
     gin['Tint'].default_value = (tint[0], tint[1], tint[2], 1)
+    if doc.get('tint_colours'):
+        _prop_tint(mat, doc['tint_colours'], uvmap, normal if normal_image else None, gin['Tint'])
     gin['Roughness'].default_value = float(surface[0])
     gin['Metallic'].default_value = float(surface[1])
     gin['Alpha Cutoff'].default_value = cutoff

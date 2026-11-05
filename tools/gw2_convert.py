@@ -715,7 +715,28 @@ class Gw2Converter(Converter):
         def sky_texture(doc, ref):
             texture = self.archive.resolve(doc, ref)
             return self.texture(texture[0]['guid']) if texture else None
-        return environment.pick(environments, self.archive.resolve, sky_texture)
+        out = environment.pick(environments, self.archive.resolve, sky_texture)
+        try:
+            out.update(environment.grade(environments, self.archive.resolve, self.grading_lut))
+        except (ValueError, KeyError, TypeError, struct.error) as error:
+            self.errors.append({'stage': 'colour grade', 'error': str(error)})
+        return out
+
+    def grading_lut(self, doc, ref):
+        """A visual environment's ColorGradingTexture as an image (tools/environment.py grading_lut), or None."""
+        found = self.archive.resolve(doc, ref)
+        rid = found and (found[1].get('Resource') or {}).get('$resource')
+        resource = self.archive.resources.get(rid) if rid else None
+        if resource is None:
+            return None
+        header = self.archive.data(resource)
+        chunk = self.archive.chunks.get(environment.lut_chunk(header) or '')
+        image = environment.grading_lut(header, self.archive.data(chunk)) if chunk else None
+        if image is None:
+            return None
+        rel = 'textures/frostbite/grade_' + rid + '.png'
+        png(self.assets / rel, *image)
+        return rel
 
     def scene(self, map_name, choice=''):
         """choice picks one map of a level and its time of day ('1', 'night', '1-night'; see variants.py)."""

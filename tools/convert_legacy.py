@@ -23,7 +23,59 @@ ROLES = {
     'base': ['color', '__color', 'colortexture', 'diffuse', '_basecolor', '_diffuse', 'base_cstr', 'layer1_color', 'material2_color'],
     'normal': ['normal', '__normaltint', 'normaltexture', 'packednormaltexture', 'base_normhao', 'material2_normal'],
     'mask': ['asm', '__rsmemissive', 'rsmtexture', '_rsm', 'material2_asm'],
+    'decal': ['__decal'],
 }
+TINT_NAMES = ('Tint_Color', 'Tint_Color2', 'TintColorQ1', 'TintColorQ2', 'TintColorQ3', 'TintColorQ4',
+              'DecalColor', 'DecalColor2', 'DecalColorQ1', 'DecalColorQ2', 'DecalColorQ3', 'DecalColorQ4',
+              'DecalSmoothness')
+
+
+def tint_vectors(shader):
+    """A shader instance's or preset's tint colours: {name: [r, g, b, a]}."""
+    out = {}
+    for p in shader.get('VectorParameters', []) or []:
+        name, value = p.get('ParameterName'), p.get('Value')
+        if name in TINT_NAMES and isinstance(value, dict):
+            out[name] = [float(value.get(k, 1.0)) for k in 'xyzw']
+    return out
+
+
+def bfn_tint(vectors, textures):
+    """Battle for Neighborville prop tints (GW3_Prop_Main and its kin): the base colour is multiplied by the
+    colour of the UV quadrant it lies in (TintColorQ1..Q4; Tint_Color when there are none) where the alpha of
+    the __NormalTint texture is white, and by Tint_Color2 where it is black (chipped paint, bare metal). None
+    when nothing is tinted."""
+    quadrants = [vectors.get('TintColorQ%d' % i) for i in range(1, 5)]
+    single = vectors.get('Tint_Color')
+    if not any(quadrants) and not single:
+        return None
+    white = [1.0, 1.0, 1.0, 1.0]
+    quadrants = [q or single or white for q in quadrants] if any(quadrants) else [single] * 4
+    out = {'quadrants': [[round(v, 5) for v in q[:3]] + [1.0] for q in quadrants],
+           'masked': '__normaltint' in textures}
+    if out['masked'] and vectors.get('Tint_Color2'):
+        out['unmasked'] = [round(v, 5) for v in vectors['Tint_Color2'][:3]] + [1.0]
+    if all(q == white for q in out['quadrants']) and out.get('unmasked', white) == white:
+        return None
+    return out
+
+
+def bfn_prop_decal(vectors, graph):
+    """Battle for Neighborville decal sections (GW3_Prop_Decal_LerpNormal and _LerpEverything): strips laid over
+    a prop that sample the __Decal atlas (normal X and Y in red and green, a shade in blue, a two-level mask in
+    alpha: the seam band, and the stitches above it). LerpEverything paints them DecalColor (or the colour of their
+    UV quadrant, DecalColorQ1..Q4) and the stitches DecalColor2 when it is given; LerpNormal changes only the
+    normal, so the prop's own colour shows through."""
+    single = vectors.get('DecalColor') or [1.0, 1.0, 1.0, 1.0]
+    out = {'mode': 'normal' if 'lerpnormal' in graph.lower() else 'everything',
+           'quadrants': [[round(v, 5) for v in (vectors.get('DecalColorQ%d' % i) or single)[:3]] + [1.0]
+                         for i in range(1, 5)],
+           'smoothness': round(float((vectors.get('DecalSmoothness') or [.5])[0]), 5)}
+    if vectors.get('DecalColor2'):
+        out['stitches'] = [round(v, 5) for v in vectors['DecalColor2'][:3]] + [1.0]
+    return out
+
+
 ALPHA_HINTS = ('foliage', 'grass', 'leaf', 'leaves', 'vegetation', 'vegitation', 'fern', 'ivy', 'decal', 'hedge', 'bush', 'flower', 'vine')
 # Meshes the game places but never draws: invisible walls and gameplay blockers (collision only), and lighting
 # blockers that only shape baked light.
@@ -240,10 +292,26 @@ class LegacyConverter:
             self.texture_paths[rid] = (rel, float((alpha < 128).mean()))
         return self.texture_paths[rid], obj.get('Name', '')
 
+    def grading_lut(self, doc, ref):
+        """A GradingLutAsset as an image (tools/environment.py grading_lut), or None."""
+        found = self.resolve(doc, ref)
+        rid = found and (found[1].get('Resource') or {}).get('$resource')
+        resource = self.archive.resources.get(rid) if rid else None
+        if resource is None:
+            return None
+        header = self.archive.data(resource)
+        chunk = self.archive.chunks.get(environment.lut_chunk(header) or "")
+        image = environment.grading_lut(header, self.archive.data(chunk)) if chunk else None
+        if image is None:
+            return None
+        rel = 'textures/frostbite/grade_' + rid + '.png'
+        png(self.assets / rel, *image)
+        return rel
+
     def material(self, mesh_doc, mesh_obj, index, section_name):
         materials = mesh_obj.get('Materials', [])
         found = self.resolve(mesh_doc, materials[index]) if index < len(materials) else None
-        params = []
+        params, vectors = [], {}
         if found:
             mat_doc, mat = found
             if self.game == 'bfn':
@@ -256,10 +324,15 @@ class LegacyConverter:
             # Battle for Neighborville materials often name a SurfaceShaderPreset as their shader,
             # which holds the textures. Then the mesh variation, then the material's own override them.
             preset, depth = self.resolve(mat_doc, shader.get('Shader')), 0
+            presets = []
             while preset and preset[1].get('$type') == 'SurfaceShaderPreset' and depth < 4:
                 inner = preset[1].get('ShaderPreset') or {}
                 params = [(preset[0], p) for p in inner.get('TextureParameters', [])] + params
+                presets.insert(0, inner)
                 preset, depth = self.resolve(preset[0], inner.get('Shader')), depth + 1
+            # Colours (tints) override in the same order: the innermost preset first, the material last.
+            for source in presets + [shader]:
+                vectors.update(tint_vectors(source))
             if mat.get('$guid') in self.variations:
                 var_doc, var_params = self.variations[mat['$guid']]
                 params += [(var_doc, p) for p in var_params]
@@ -279,17 +352,28 @@ class LegacyConverter:
                         textures[role] = result[0]; names[role] = tex_name
                         if role == 'base': transparency = result[1]
                     break
-        digest = hashlib.sha256(json.dumps([textures, section_name.lower()], sort_keys=True).encode()).hexdigest()[:20]
+        tint = bfn_tint(vectors, by_name) if self.game == 'bfn' else None
+        graph = (preset[1].get('Name') or '') if found and preset and preset[1] is not None else ''
+        decal = None
+        if self.game == 'bfn' and 'gw3_prop_decal' in graph.lower() and textures.get('decal'):
+            decal, tint = bfn_prop_decal(vectors, graph), None
+        digest = hashlib.sha256(json.dumps([textures, section_name.lower()] + ([tint] if tint else [])
+                                           + ([decal] if decal else []), sort_keys=True).encode()).hexdigest()[:20]
         if digest in self.materials: return self.materials[digest]
         params_rows = [[1, 1, 1, 1], [.7, 0, 1, 0], [1, 1, 0, 0], [0, 0, 0, 0]]
-        # Battle for Neighborville packs its tangent-space normal in green and alpha.
-        if self.game == 'bfn' and 'normal' in textures: params_rows[1][3] = 1
         hinted = any(h in (section_name + ' ' + names.get('base', '')).lower() for h in ALPHA_HINTS)
         # Character textures use alpha for masks, so cosmetics cut out only where the name says so.
         cutoff = .333 if transparency > .02 and (hinted or (transparency > .2 and getattr(self, 'cutouts', True))) else -1
         obj = {'format': 'aura-frostbite-material', 'version': 1, 'name': section_name, 'textures': textures,
                'texture_sources': names, 'parameters': params_rows, 'double_sided': True, 'alpha_cutoff': cutoff,
                'texture_srgb': {'base': True, 'normal': False, 'mask': False}}
+        if tint:
+            obj['tint_colours'] = tint
+        if decal:
+            obj.update({'surface': 'prop_decal', 'prop_decal': decal, 'blend': 'alpha', 'alpha_cutoff': -1,
+                        'source_decal_template': graph,
+                        'surface_approximation': 'A decal strip alpha blended over its prop; LerpNormal strips '
+                            'darken where their normal tilts instead of blending the normal into the prop.'})
         rel = 'materials/frostbite/' + digest + '.json'
         path = self.assets / rel; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(json.dumps(obj, indent=2))
         self.materials[digest] = rel
@@ -751,6 +835,10 @@ class LegacyConverter:
             def sky_texture(doc, ref):
                 return self.texture(doc, ref)[0]
             outdoor.update(environment.pick(self.environments, self.resolve, sky_texture, physical=True))
+            try:
+                outdoor.update(environment.grade(self.environments, self.resolve, self.grading_lut))
+            except (OSError, ValueError, KeyError, struct.error) as error:
+                self.errors.append({'stage': 'colour grade', 'error': str(error)})
             self.counts['light_scale'] = round(environment.scale_lights(places, outdoor), 6)
             self.counts['environment'] = outdoor.get('environment', '')
         places.insert(0, {'kind': 'frostbite_environment', 'name': title + ' outdoor settings', 'at': [0, 0, 0], 'tags': {},

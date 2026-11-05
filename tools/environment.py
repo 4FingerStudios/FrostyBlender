@@ -73,6 +73,77 @@ def pick(environments, resolve, sky_texture, physical=False):
     return {k: v for k, v in out.items() if v is not None}
 
 
+def grade(environments, resolve, lut):
+    """The level's colour grade: of the visual environments with colour correction, the one the level gives the
+    highest priority (gameplay states such as Overtime are excluded or referenced at priority 0; underwater
+    ones only apply under water). Its grading LUT as an image (lut(doc, ref) gives an asset path or None), and
+    brightness, contrast and saturation where they aren't neutral. Empty when the level has none."""
+    best = None
+    for priority, source, target in environments:
+        if 'underwater' in (target[1].get('Name') or '').lower():
+            continue
+        entity = resolve(target[0], target[1].get('Object'))
+        for ref in (entity[1].get('Components', []) or []) if entity else []:
+            part = resolve(entity[0], ref)
+            if part and part[1].get('$type') == 'ColorCorrectionComponentData' and part[1].get('Enable', True) \
+                    and not part[1].get('Excluded') and (best is None or priority > best[0]):
+                best = (priority, target, part)
+    if best is None:
+        return {}
+    _, target, (doc, cc) = best
+    out = {'grade_environment': target[1].get('Name', '')}
+    # Battle for Neighborville names its table HdrColorGradingLut, Garden Warfare ColorGradingTexture.
+    table = cc.get('HdrColorGradingLut') or cc.get('ColorGradingTexture')
+    if cc.get('ColorGradingEnable') and isinstance(table, dict) and table.get('$pointer', 1):
+        path = lut(doc, table)
+        if path:
+            out['grade_lut'] = path
+    for key, name in (('Brightness', 'grade_brightness'), ('Contrast', 'grade_contrast'), ('Saturation', 'grade_saturation')):
+        value = vec(cc.get(key))
+        if value and any(abs(v - 1) > 1e-4 for v in value):
+            out[name] = value
+    return out if len(out) > 1 else {}
+
+
+GW_RGBA8 = 18   # Garden Warfare's texture format for its grading tables
+
+
+def lut_chunk(header):
+    """The chunk GUID (hex) of a grading table's texels: at header byte 32 for Garden Warfare, 36 for Battle for
+    Neighborville (reader layout)."""
+    import struct
+    if len(header) < 52:
+        return None
+    at = 32 if struct.unpack_from('<I', header, 12)[0] == GW_RGBA8 else 36
+    return header[at:at + 16].hex()
+
+
+def grading_lut(header, data):
+    """A colour grading LUT as a 2D image for the importer: (width n * n, height n, RGBA bytes), the n blue slices
+    side by side, red across each slice and green up the image. Battle for Neighborville's GradingLutAsset is a 3D
+    texture, n x n x n, 10:10:10:2 unsigned, green rows stored top down; Garden Warfare's ColorGradingTexture is a
+    3D texture of format 18 (8-bit RGBA) with its size four bytes earlier in the header, green rows bottom up.
+    None for any other layout."""
+    import struct
+    import numpy as np
+    if len(header) < 52 or struct.unpack_from('<I', header, 8)[0] != 2:
+        return None
+    gw = struct.unpack_from('<I', header, 12)[0] == GW_RGBA8
+    n, height, depth = struct.unpack_from('<3H', header, 18 if gw else 22)
+    if not 2 <= n <= 128 or n != height or n != depth or len(data) < n ** 3 * 4 or (not gw and len(data) != n ** 3 * 4):
+        return None
+    if gw:
+        texels = np.frombuffer(data[:n ** 3 * 4], np.uint8).reshape(n, n, n, 4)[:, ::-1]   # green rows top down
+        rgb = texels[..., :3].astype(np.float32) / 255
+    else:
+        words = np.frombuffer(data, '<u4').reshape(n, n, n).astype(np.uint32)     # [blue][green, top down][red]
+        rgb = np.stack([words & 1023, (words >> 10) & 1023, (words >> 20) & 1023], -1).astype(np.float32) / 1023
+    image = np.full((n, n * n, 4), 255, np.uint8)
+    # Rows top down are green 1..0, as the game stores them; columns are blue slice * n + red.
+    image[..., :3] = np.round(rgb.transpose(1, 0, 2, 3).reshape(n, n * n, 3) * 255)
+    return n * n, n, image.tobytes()
+
+
 PBR_LIGHTS = {'PbrSphereLightEntityData': 'POINT', 'PbrSpotLightEntityData': 'SPOT',
               'PbrRectangularLightEntityData': 'AREA'}
 
