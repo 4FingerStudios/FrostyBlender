@@ -247,6 +247,13 @@ def _run(request):
         scene.frostbite.texture_size = options['texture_size']
     if 'game_shaders' in options:
         scene.frostbite.game_shaders = bool(options['game_shaders'])
+    # Map settings from the app (older apps send none, and the panel's values stay).
+    if str(options.get('map_effects', '')).upper() in ('NONE', 'AMBIENT', 'ALL'):
+        scene.frostbite.map_effects = str(options['map_effects']).upper()
+    for key in ('include_decals', 'game_modes', 'include_fog', 'include_grade', 'include_markers', 'include_scatter',
+                'include_collision'):
+        if key in options:
+            setattr(scene.frostbite, key, bool(options[key]))
     with bpy.context.temp_override(**_override()):
         if kind == 'maps':
             state = scene.frostbite

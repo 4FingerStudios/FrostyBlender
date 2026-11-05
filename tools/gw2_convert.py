@@ -4,7 +4,7 @@ import hashlib
 import struct
 from pathlib import Path
 import numpy as np
-from convert import Archive, Converter, matrix, read_attr, write_mesh, write_skin, skin_attrs, png
+from convert import decals_on, Archive, Converter, matrix, read_attr, write_mesh, write_skin, skin_attrs, png
 from gw2_terrain import (terrain_tree, tile_heights, height_section, mask_pages, tile_masks, layer_textures,
                          colour_pages, tile_colour,
                          compositing_layers, texture_role, scatter_meshes, scatter_weights)
@@ -202,6 +202,9 @@ class Gw2Converter(Converter):
         self.map_rigs = MapRigs(self)  # skinned map objects: skeleton, skin and looping clip
         from markers import Markers
         self.markers = Markers(archive.inventory.get('profile', 'gw2'))  # spawns, teleporters, purchase spots
+        import bfn_map_effects
+        self.effects = bfn_map_effects.MapEffects(self, textures, game='gw')  # smoke, fire, sparks, lights
+        self._event_targets = {}  # document guid -> indices of the objects its logic sends events to
         for asset, doc in archive.documents.values():
             if asset.get('root_type') != 'MeshVariationDatabase':
                 continue
@@ -709,6 +712,16 @@ class Gw2Converter(Converter):
         found = self.archive.by_guid.get(doc.get('guid'))
         return found[0].get('name', '') if found else ''
 
+    def event_target(self, doc, obj):
+        """Whether the document's logic sends events to this object (Garden Warfare starts gameplay effects so)."""
+        key = doc.get('guid')
+        if key not in self._event_targets:
+            root = doc['objects'][0] if doc.get('objects') else {}
+            self._event_targets[key] = {c['Target'].get('index') for c in root.get('EventConnections') or []
+                                        if isinstance(c.get('Target'), dict) and c['Target'].get('$pointer') == 1}
+        targets = self._event_targets[key]
+        return bool(targets) and any(o is obj for i, o in enumerate(doc['objects']) if i in targets)
+
     def environment(self, environments):
         """Sun, sky and fog of the level's main visual environment (tools/environment.py). Empty when the
         level has none."""
@@ -921,7 +934,7 @@ class Gw2Converter(Converter):
                     at = world @ np.array([x, 0, z, 1.0])
                     return self.floor_at(at[0], at[2], geometry=tiles) - world[1, 3]
                 try:
-                    for path, material in terrain_decals.convert(self, terrain, ground):
+                    for path, material in (terrain_decals.convert(self, terrain, ground) if decals_on() else ()):
                         places.append({'kind': 'frostbite_mesh', 'name': 'GW2 terrain decal', 'matrix': world.tolist(),
                                        'tags': {'mesh': path, 'material_0': material, 'source': terrain[1].get('Name', ''),
                                                 'source_level': source, 'level_instance': source, 'profile': 'gw2'},
@@ -976,6 +989,11 @@ class Gw2Converter(Converter):
                 target = self.archive.resolve(doc, obj.get('Blueprint'))
                 if target:
                     environments.append((obj.get('Priority', 0), source, target))
+            elif kind == 'EffectReferenceObjectData':
+                try:
+                    self.effects.add(doc, obj, transform, source, self.event_target(doc, obj))
+                except ValueError as error:
+                    self.errors.append({'stage': 'effect', 'layer': source, 'error': str(error)})
             elif kind in ('PointLightEntityData', 'SpotLightEntityData') and obj.get('Visible', True):
                 light = light_values(obj)
                 if light:
@@ -1029,6 +1047,8 @@ class Gw2Converter(Converter):
                           'values': outdoor, 'tags': {}})
         places.insert(0, {'kind': 'spawn', 'name': 'GW2 editor spawn', 'at': spawn, 'values': {}, 'tags': {}})
         places += self.markers.places
+        places += self.effects.build(lambda x, z: True)
+        self.counts.update(self.effects.counts)
         report = {'profile': 'gw2', 'map': map_name, 'layers': roots, 'placements': len(places),
                   'meshes': len(self.meshes), 'materials': len(self.materials), 'textures': len(self.texture_paths),
                   'counts': self.counts, 'errors': self.errors, 'skipped_entities': self.skipped,
@@ -1045,7 +1065,8 @@ class Gw2Converter(Converter):
                                   'Terrain heightfields, painted layers and scattered grass are translated (scatter positions are random, at the game density); holes are not.',
                                   'Water exports a bounded plane and native shader sidecars; Blender approximates the surface without game wave simulation.',
                                   'Skinned map objects are rigged and loop their default clip; characters and original gameplay are not translated.',
-                                  'Gameplay markers cover spawns, teleporters, purchase spots and vehicles; capture points and bomb sites are placed by game logic at run time and are left out.']}
+                                  'Gameplay markers cover spawns, teleporters, purchase spots and vehicles; capture points and bomb sites are placed by game logic at run time and are left out.',
+                                  'Ambient effects (smoke, fire, sparks, steam, their lights) are simulated and placed; effects that gameplay starts are skipped unless the Map effects setting is All (AURA_MAP_EFFECTS=all).']}
         scene = {'format': 'aura-frostbite-scene', 'version': 1, 'name': 'GW2_' + map_name, 'places': places}
         if self.scatter_types:
             scene['terrain_scatter_types'] = self.scatter_types

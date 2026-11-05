@@ -92,7 +92,13 @@ def stream_size(data):
 def export(game, package, output, jobs=None):
     game, output = Path(game), Path(output)
     resource_data = {}
-    return finish(game, output, gw2.export(game, package, output, jobs, resource_data), resource_data, jobs)
+    inventory = finish(game, output, gw2.export(game, package, output, jobs, resource_data, atlases=False), resource_data, jobs)
+    import effects
+    # Placed effects' flipbook (atlas) textures keep their pixels in chunks the texture path does not fetch.
+    if any(a.get('resource_type') == effects.ATLAS_RESOURCE for a in inventory['assets']):
+        effects._atlas_chunks(game, 'gw1', output, inventory, gw2.cached_dependency_index(game, jobs))
+    (output / 'inventory.json').write_text(json.dumps(inventory, indent=2), encoding='utf-8')
+    return inventory
 
 
 def finish(game, output, inventory, resource_data=None, jobs=None):

@@ -3,6 +3,7 @@
     python bridge.py discover --tools TOOLS --game GAME --out maps.json
     python bridge.py import --tools TOOLS --reader READER --game GAME --mod MOD
                             --package PACKAGE --job JOB [--texture-size N] [--keep] [--bfn-types NAMES]
+                            [--effects none|ambient|all] [--no-decals] [--game-modes]
     python bridge.py cosmetics-discover --tools TOOLS --game GAME --out cosmetics.json
     python bridge.py props-discover --tools TOOLS --game GAME --out props.json  (props-import as cosmetics-import)
     python bridge.py npcs-discover --tools TOOLS --game GAME --out npcs.json  (npcs-import as cosmetics-import)
@@ -221,19 +222,23 @@ def run_import(args):
         run([args.reader, game, args.mod, exported], 'Reading archives', 1)
     env = dict(os.environ, AURA_IMPORT_TEXTURE_SIZE=str(args.texture_size))
     run([args.reader, '--textures', exported, textures], 'Decoding textures', 2, (0, 3), env)
+    # Map settings reach the converters through their environment (tools/bfn_map_effects.py, convert.decals_on).
+    settings = dict(os.environ, AURA_MAP_EFFECTS=args.effects, AURA_MAP_DECALS='0' if args.no_decals else '1')
     if bfn:
         command = [sys.executable, tools / 'convert_legacy.py', '--export', exported, '--textures', textures,
                    '--assets', assets, '--out', scene, '--level', package]
         if variant:
             command += ['--variant', variant]
-        run(command, 'Converting geometry', 3)
+        if args.game_modes:
+            command.append('--everything')
+        run(command, 'Converting geometry', 3, (0,), settings)
     else:
         converter = 'gw2_convert.py' if gw2 else 'convert.py'
         command = [sys.executable, tools / converter, '--export', exported, '--textures', textures,
                    '--assets', assets, '--out', scene, '--map', mapname]
         if variant and gw2:
             command += ['--variant', variant]
-        run(command, 'Converting geometry', 3, (0, 1))
+        run(command, 'Converting geometry', 3, (0, 1), settings)
     report = json.loads(scene.with_suffix('.report.json').read_text(encoding='utf-8'))
     if not args.keep:
         shutil.rmtree(exported, ignore_errors=True)
@@ -259,6 +264,10 @@ def main():
     p.add_argument('--job', type=Path)
     p.add_argument('--texture-size', type=int, default=1024)
     p.add_argument('--keep', action='store_true')
+    p.add_argument('--effects', choices=('none', 'ambient', 'all'), default='ambient',
+                   help='import: map effects to place (all: also those gameplay starts)')
+    p.add_argument('--no-decals', action='store_true', help='import: leave out decal volumes and terrain decals')
+    p.add_argument('--game-modes', action='store_true', help='import: Battle for Neighborville game-mode sub-levels too')
     p.add_argument('--bfn-types', type=Path, help='Battle for Neighborville type name table (frosty_types.ps1)')
     p.add_argument('--items', type=Path, help='cosmetics-import: JSON list of items from cosmetics-discover')
     p.add_argument('--icons-dir', type=Path, help='icons: folder for the PNGs')

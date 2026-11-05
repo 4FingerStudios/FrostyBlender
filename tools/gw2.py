@@ -550,7 +550,9 @@ def complete_dependencies(game, output, inventory, documents=None, resource_data
     follow = {'WorldPartData', 'ObjectBlueprint', 'SpatialPrefabBlueprint', 'LogicPrefabBlueprint', 'SubWorldData',
               'RigidMeshAsset', 'CompositeMeshAsset', 'SkinnedMeshAsset', 'MeshVariationDatabase', 'TextureAsset',
               'AtlasTextureAsset',
-              'TerrainData'}
+              'TerrainData',
+              # Placed effects (tools/bfn_map_effects.py): their emitters, and the emitters' textures and meshes.
+              'EffectBlueprint', 'ScalableEmitterDocument', 'EmitterDocument', 'GpuRuntimeEmitterDocument'}
     resources = {a['resource_id'] for a in inventory['assets'] if a['kind'] == 'resource'}
     # Texture assets import nothing, so a missing resource also needs the index.
     missing = any(doc['root_type'] in ('TextureAsset', 'AtlasTextureAsset') and (doc['objects'][0].get('Resource') or {}).get('$resource') not in resources
@@ -816,7 +818,7 @@ def _export_asset(task):
     return item, document, cached
 
 
-def export(game, package, output, jobs=None, resource_data=None):
+def export(game, package, output, jobs=None, resource_data=None, atlases=True):
     game, output = Path(game), Path(output)
     data_root = (game / 'Data').resolve()
     toc = (data_root / (package + '.toc')).resolve()
@@ -870,6 +872,11 @@ def export(game, package, output, jobs=None, resource_data=None):
     print('GW2 duplicate assets skipped without decompression:', duplicates, flush=True)
     complete_dependencies(game, output, inventory, documents, resource_data, workers)
     complete_texture_chunks(game, output, inventory, resource_data=resource_data, jobs=workers)
+    import effects
+    if atlases and any(a.get('resource_type') == effects.ATLAS_RESOURCE for a in inventory['assets']):
+        # (GW1 fetches its own after gw1.finish.)
+        # Placed effects' flipbook (atlas) textures keep their pixels in chunks the texture path does not fetch.
+        effects._atlas_chunks(game, 'gw2', Path(output), inventory, cached_dependency_index(game, workers))
     (output / 'inventory.json').write_text(json.dumps(inventory, indent=2), encoding='utf-8')
     return inventory
 

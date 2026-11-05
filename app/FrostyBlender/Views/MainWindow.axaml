@@ -189,7 +189,8 @@
                         CornerRadius="3" Padding="10" Margin="0,12,0,0">
                   <StackPanel Spacing="12">
                     <Expander Header="Import settings" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" FontSize="12.5">
-                    <StackPanel Spacing="10">
+                    <ScrollViewer MaxHeight="256" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Spacing="10" Margin="0,0,6,0">
                     <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding !IsAnimations}">
                       <TextBlock Text="Texture size" VerticalAlignment="Center" />
                       <ComboBox Grid.Column="1" Width="110" ItemsSource="{Binding TextureSizes}" SelectedItem="{Binding TextureSize}" />
@@ -201,12 +202,35 @@
                               IsEnabled="{Binding Rig}" Margin="22,0,0,0"
                               ToolTip.Tip="Adds FK/IK controls, eye aim and bone groups on top of the game skeleton. Game animations still import onto it." />
                     <CheckBox Content="Spawn at the 3D cursor" IsChecked="{Binding SpawnAtCursor}" IsVisible="{Binding ShowCursorOption}" />
+                    <StackPanel Spacing="8" IsVisible="{Binding IsMaps}">
+                      <TextBlock Text="Map settings" Classes="muted" FontSize="11.5" />
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Text="Map effects" VerticalAlignment="Center"
+                                   ToolTip.Tip="None: no particle effects (fastest). Ambient: smoke, fog, steam, dust, flies, god rays. All: also the effects gameplay fires (pickups, spawn flashes, explosions)." />
+                        <ComboBox Grid.Column="1" Width="110" ItemsSource="{Binding MapEffectChoices}" SelectedItem="{Binding MapEffects}" />
+                      </Grid>
+                      <WrapPanel Orientation="Horizontal" ItemWidth="130">
+                      <CheckBox Content="Decals" IsChecked="{Binding IncludeDecals}"
+                                ToolTip.Tip="BFN decal volumes (paint, cracks, signs) and GW1/GW2 terrain decals (road markings, puddles, ponds, streams)." />
+                      <CheckBox Content="Fog" IsChecked="{Binding IncludeFog}"
+                                ToolTip.Tip="The level's distance fog, as a compositor step (shows in renders)." />
+                      <CheckBox Content="Colour grade" IsChecked="{Binding IncludeGrade}"
+                                ToolTip.Tip="The level's colour grading as a compositor step, with a Grade strength value to fade it." />
+                      <CheckBox Content="Markers" IsChecked="{Binding IncludeMarkers}"
+                                ToolTip.Tip="Gameplay markers: spawns, teleporters, purchase spots and vehicles as labelled empties." />
+                      <CheckBox Content="Grass, leaves" IsChecked="{Binding IncludeScatter}"
+                                ToolTip.Tip="The grass, leaves and twigs the game strews over painted terrain (GW1 and GW2)." />
+                      <CheckBox Content="Game modes" IsChecked="{Binding GameModes}" IsVisible="{Binding IsBfnMaps}"
+                                ToolTip.Tip="Also place Battle for Neighborville game-mode sub-levels (objectives and mode props)." />
+                      </WrapPanel>
+                    </StackPanel>
                     <StackPanel Spacing="8" IsVisible="{Binding IsAnimations}">
                       <TextBlock Text="Put the clips on" />
                       <ComboBox HorizontalAlignment="Stretch" ItemsSource="{Binding Armatures}" SelectedItem="{Binding Armature}" />
                       <CheckBox Content="Match scene frame rate" IsChecked="{Binding SetFps}" />
                     </StackPanel>
                     </StackPanel>
+                    </ScrollViewer>
                     </Expander>
                     <Button Classes="accent" HorizontalAlignment="Stretch" Padding="0,8" FontSize="18"
                             Command="{Binding SendCommand}" IsEnabled="{Binding !Sending}">

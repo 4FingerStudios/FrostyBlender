@@ -74,12 +74,14 @@ def bone_names(bones):
 
 class Importer:
     def __init__(self, scene_path, assets, include_collision=False, group_by_level=True,
-                 add_lighting=True, report=print, rig=True, include_markers=True, include_scatter=True):
+                 add_lighting=True, report=print, rig=True, include_markers=True, include_scatter=True,
+                 include_fog=True, include_grade=True):
         self.scene_path = Path(scene_path)
         self.assets = Path(assets)
         self.include_collision = include_collision
         self.include_markers = include_markers
         self.include_scatter = include_scatter
+        self.include_fog, self.include_grade = include_fog, include_grade  # map settings: compositor steps
         self.scatter_sources, self.scattered = None, 0
         self.marker_root, self.marker_groups = None, {}
         self.group_by_level = group_by_level
@@ -614,7 +616,7 @@ class Importer:
         out = node('ShaderNodeOutputWorld', 800, 0)
         link(seen.outputs[0], out.inputs['Surface'])
         start, end = float(values.get('fog_start', 0.0)), float(values.get('fog_end', 0.0))
-        if values.get('fog_color') and end > start >= 0:
+        if self.include_fog and values.get('fog_color') and end > start >= 0:
             curve = values.get('fog_curve')
             peak = min(max(sum(curve) if curve else 0.8, 0.05), 0.95)
             if values.get('sun_lux'):
@@ -625,7 +627,8 @@ class Importer:
                 self.fog(context, world, values['fog_color'], start, end, peak)
             except (AttributeError, RuntimeError, KeyError, TypeError) as error:
                 self.warnings.append('fog not set up: %s' % error)
-        if any(values.get(k) for k in ('grade_lut', 'grade_brightness', 'grade_contrast', 'grade_saturation')):
+        if self.include_grade and any(values.get(k) for k in ('grade_lut', 'grade_brightness', 'grade_contrast',
+                                                              'grade_saturation')):
             try:
                 self.grade(context, values.get('grade_lut'), values.get('grade_environment', ''),
                            values.get('grade_brightness'), values.get('grade_contrast'), values.get('grade_saturation'))

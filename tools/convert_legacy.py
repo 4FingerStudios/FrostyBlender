@@ -5,7 +5,7 @@ All outputs are local game assets. Never commit them to the plugin repository.
 import argparse, hashlib, json, os, re, struct
 from pathlib import Path
 import numpy as np
-from convert import Archive, png, write_mesh, write_skin, read_attr, skin_attrs
+from convert import decals_on, Archive, png, write_mesh, write_skin, read_attr, skin_attrs
 import bfn_maps
 import bfn_physics
 import bfn_terrain
@@ -577,7 +577,7 @@ class LegacyConverter:
             elif kind == 'WaterEntityData' and self.game == 'bfn':
                 self.water_entities.append((doc, obj, matrix @ transform(obj.get('Transform', {}))))
             elif kind == 'EnvironmentDecalVolumeData' and self.game == 'bfn':
-                self.decals.add(doc, obj, matrix, source)
+                if decals_on(): self.decals.add(doc, obj, matrix, source)
             elif kind in ('VisualEnvironmentReferenceObjectData', 'LogicVisualEnvironmentReferenceObjectData'):
                 # The level's sun, sky and fog (tools/environment.py): the kept sub-worlds reference the chosen
                 # map's own, day or night.
@@ -849,7 +849,7 @@ class LegacyConverter:
                   'limitations': (['Static meshes, terrain heightfields, water surfaces, decal volumes and ambient effects; gameplay logic is not converted.',
                                    'Water uses the authored water meshes with an animated Blender water shader; depth colour, foam and flow are not executed.',
                                    'Decal volumes are projected onto the map triangles inside them and alpha blended; native decal masks are not executed.',
-                                   'Effects that gameplay starts (AutoStart off) are skipped; set AURA_BFN_MAP_EFFECTS=all to place them.',
+                                   'Effects that gameplay starts (AutoStart off) are skipped; the Map effects setting (AURA_MAP_EFFECTS=all) places them.',
                                    'Gameplay markers cover each mode\'s spawns, teleporters and purchase spots; objectives the modes move into place at run time are left out.']
                                   if self.game == 'bfn' else
                                   ['Static meshes and Battle for Neighborville terrain heightfields only: water, decals, effects and gameplay entities are not converted.']) + [

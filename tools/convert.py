@@ -71,6 +71,10 @@ class Archive:
         obj=next((o for o in d['objects'] if o['$guid']==imp['object']),None)
         return (d,obj) if obj else None
 
+def decals_on():
+    """The add-on's Decals map setting (AURA_MAP_DECALS=0 leaves decal volumes and terrain decals out)."""
+    return os.environ.get('AURA_MAP_DECALS', '1') != '0'
+
 def matrix(value):
     m=np.eye(4,dtype=np.float64)
     for i,k in enumerate(['right','up','forward','trans']):

@@ -82,6 +82,7 @@ public partial class MainViewModel : ObservableObject
 
     public IReadOnlyList<string> Games { get; } = new[] { "GW1", "GW2", "BFN" };
     public IReadOnlyList<string> TextureSizes { get; } = new[] { "512", "1024", "2048" };
+    public IReadOnlyList<string> MapEffectChoices { get; } = new[] { "None", "Ambient", "All" };
 
     public ObservableCollection<Entry> Entries { get; } = new();
     public ObservableCollection<Row> Rows { get; } = new();
@@ -110,6 +111,14 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _proRig = true;
     [ObservableProperty] private bool _spawnAtCursor = true;
     [ObservableProperty] private bool _setFps = true;
+    // Map settings (sent with a map import; the add-on reads the first three while converting).
+    [ObservableProperty] private string _mapEffects = "Ambient";
+    [ObservableProperty] private bool _includeDecals = true;
+    [ObservableProperty] private bool _gameModes;
+    [ObservableProperty] private bool _includeFog = true;
+    [ObservableProperty] private bool _includeGrade = true;
+    [ObservableProperty] private bool _includeMarkers = true;
+    [ObservableProperty] private bool _includeScatter = true;
     [ObservableProperty] private bool _hideAdditive = true;
     [ObservableProperty] private string _armature = ActiveArmature;
     [ObservableProperty] private int _ticked;
@@ -130,6 +139,8 @@ public partial class MainViewModel : ObservableObject
     public bool IsNpcs => Section == Section.Npcs;
     public bool ShowCursorOption => Section is Section.Npcs or Section.Effects;
     public bool IsAnimations => Section == Section.Animations;
+    public bool IsMaps => Section == Section.Maps;
+    public bool IsBfnMaps => IsMaps && Game == "BFN";
     public bool HasSelection => SelectedEntry != null;
     public bool ShowPreview => SelectedEntry is { Wide: true, HasIcon: true };
     public bool HasError => Error.Length > 0;
@@ -292,7 +303,7 @@ public partial class MainViewModel : ObservableObject
     partial void OnSelectedNavChanged(NavItem value)
     {
         foreach (var name in new[] { nameof(Section), nameof(IsBrowser), nameof(IsExplorer), nameof(IsSettings), nameof(HasItems),
-                     nameof(IsCharacterLike), nameof(IsNpcs), nameof(ShowCursorOption), nameof(IsAnimations), nameof(SectionTitle), nameof(SectionBlurb),
+                     nameof(IsCharacterLike), nameof(IsNpcs), nameof(ShowCursorOption), nameof(IsAnimations), nameof(IsMaps), nameof(IsBfnMaps), nameof(SectionTitle), nameof(SectionBlurb),
                      nameof(SendText), nameof(ItemsHeader), nameof(Hint), nameof(CanSendUnreal) })
             OnPropertyChanged(name);
         if (IsBrowser) _ = Scan(false);
@@ -301,6 +312,7 @@ public partial class MainViewModel : ObservableObject
 
     partial void OnGameChanged(string value)
     {
+        OnPropertyChanged(nameof(IsBfnMaps));
         UpdateBackdrop();
         if (IsExplorer) _ = LoadExplorer(false);
         else _ = Scan(false);
@@ -589,6 +601,16 @@ public partial class MainViewModel : ObservableObject
         }
         var options = new JsonObject { ["texture_size"] = TextureSize, ["rig"] = Rig, ["spawn_at_cursor"] = SpawnAtCursor, ["set_fps"] = SetFps, ["game_shaders"] = GameShaders, ["pro_rig"] = Rig && ProRig };
         if (Section == Section.Animations && Armature != ActiveArmature) options["armature"] = Armature;
+        if (Section == Section.Maps)
+        {
+            options["map_effects"] = MapEffects.ToUpperInvariant();
+            options["include_decals"] = IncludeDecals;
+            options["game_modes"] = GameModes;
+            options["include_fog"] = IncludeFog;
+            options["include_grade"] = IncludeGrade;
+            options["include_markers"] = IncludeMarkers;
+            options["include_scatter"] = IncludeScatter;
+        }
         if (unreal) options["unreal"] = true;
         var kind = Section switch
         {

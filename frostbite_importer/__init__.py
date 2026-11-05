@@ -245,6 +245,23 @@ class FrostbiteState(bpy.types.PropertyGroup):
                                               'terrain (GW1 and GW2; Geometry Nodes on each terrain tile, sparser in the viewport)')
     group_by_level: BoolProperty(name='Group by sub-level', default=True,
                                  description='One collection per streamed sub-level (layers you can hide)')
+    # Map settings: the first three are read while converting, so they apply the next time a map is imported.
+    map_effects: EnumProperty(name='Map effects', default='AMBIENT', items=[
+        ('NONE', 'None', 'No smoke, fire, steam or other effects (fastest conversion)'),
+        ('AMBIENT', 'Ambient', 'Effects that run on their own: smoke, fog, steam, dust, flies, god rays'),
+        ('ALL', 'All', 'Also the effects gameplay fires: pickups, spawn flashes, explosions, capture zones')],
+        description='Particle effects placed in the map, simulated and played back with Geometry Nodes')
+    include_decals: BoolProperty(name='Decals', default=True,
+                                 description='Decal volumes (BFN paint, cracks, signs) and terrain decals '
+                                             '(GW1/GW2 road markings, puddles, ponds and streams)')
+    game_modes: BoolProperty(name='Game-mode layers (BFN)', default=False,
+                             description='Also place Battle for Neighborville game-mode sub-levels (objectives and '
+                                         'mode props); off keeps the map as it is at rest')
+    include_fog: BoolProperty(name='Fog', default=True,
+                              description="The level's distance fog, as a compositor step (shows in renders)")
+    include_grade: BoolProperty(name='Colour grade', default=True,
+                                description="The level's colour grading (brightness, contrast, saturation and its colour "
+                                            "table), as a compositor step with a Grade strength value")
     status: StringProperty()
 
 
@@ -258,6 +275,8 @@ def import_scene(context, scene_path, assets=None, state=None):
         group_by_level=state.group_by_level if state else True,
         include_markers=state.include_markers if state else True,
         include_scatter=state.include_scatter if state else True,
+        include_fog=state.include_fog if state else True,
+        include_grade=state.include_grade if state else True,
         report=lambda level, text: print('Frostbite import:', text))
     importer.run(context)
     return importer
@@ -439,6 +458,11 @@ class FROSTBITE_OT_import_map(bpy.types.Operator):
                    '--texture-size', state.texture_size]
         if state.keep:
             command.append('--keep')
+        command += ['--effects', state.map_effects.lower()]
+        if not state.include_decals:
+            command.append('--no-decals')
+        if state.game_modes and bfn:
+            command.append('--game-modes')
         env = None
         if bfn:
             command += ['--bfn-types', bpy.path.abspath(p.bfn_types)]
@@ -495,6 +519,8 @@ class FROSTBITE_OT_import_scene(bpy.types.Operator, ImportHelper):
     include_markers: BoolProperty(name='Gameplay markers', default=True)
     include_scatter: BoolProperty(name='Terrain grass and leaves', default=True)
     group_by_level: BoolProperty(name='Group by sub-level', default=True)
+    include_fog: BoolProperty(name='Fog', default=True)
+    include_grade: BoolProperty(name='Colour grade', default=True)
 
     def execute(self, context):
         assets = Path(self.assets) if self.assets else scene_import.find_assets(self.filepath)
@@ -505,7 +531,8 @@ class FROSTBITE_OT_import_scene(bpy.types.Operator, ImportHelper):
             importer = scene_import.Importer(self.filepath, assets, self.include_collision,
                                              self.group_by_level, report=self.report,
                                              include_markers=self.include_markers,
-                                             include_scatter=self.include_scatter)
+                                             include_scatter=self.include_scatter,
+                                             include_fog=self.include_fog, include_grade=self.include_grade)
             importer.run(context)
         except (OSError, ValueError, KeyError) as error:
             self.report({'ERROR'}, str(error))
@@ -548,6 +575,16 @@ class FROSTBITE_PT_panel(bpy.types.Panel):
         col.prop(state, 'include_collision')
         col.prop(state, 'include_markers')
         col.prop(state, 'include_scatter')
+        box = layout.box()
+        box.label(text='Map settings', icon='SETTINGS')
+        col = box.column(align=True)
+        col.prop(state, 'map_effects')
+        col.prop(state, 'include_decals')
+        if is_bfn(state.game):
+            col.prop(state, 'game_modes')
+        col.prop(state, 'include_fog')
+        col.prop(state, 'include_grade')
+        col = layout.column(align=True)
         col.prop(state, 'keep')
         row = layout.row(align=True)
         row.scale_y = 1.4
