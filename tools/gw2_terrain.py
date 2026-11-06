@@ -434,6 +434,122 @@ def compositing_layers(shaderdb, layer_count):
     return None
 
 
+def combination_layers(shaderdb, combinations):
+    """Each terrain layer as the compositing shaders of its layer combinations draw it: {layer: {'paths', 'scale',
+    'height'}} (as compositing_layers), or None. For terrains where no compositing shader draws every layer (each
+    draws one combination, such as Wall-nut Hills' 10 layers in 19 combinations).
+
+    combinations: {shader graph name: [layer numbers]} of the terrain's 2d (compositing) graphs, from names like
+    <terrain>__0mv_4mv_7mv__2d__0. The shader database links a graph to its compiled shader and texture table:
+    the graph's permutation record (32 bytes, first u32 the djb-xor hash of its name) has the same number as a
+    144-byte solution, whose u64s at 32 and 72 are the pixel shader (counting only pixel shaders, in file order)
+    and the binding object holding the texture table. In a combination's shader, the rest weights its first
+    layer and mask n the n-th layer after the terrain's base layer (or the n-th layer, when the combination
+    leaves the base out)."""
+    database = _shader_database(shaderdb)
+    if not database or not combinations:
+        return None
+    ps, records, solution, table = database
+    base = min(min(layers) for layers in combinations.values())
+    found = {}
+    for name, layers in sorted(combinations.items()):
+        h = 5381
+        for c in name.lower().encode():
+            h = ((h * 33) ^ c) & 0xffffffff
+        for record in records.get(h, ()):
+            shader, binding = solution(record)
+            if shader >= len(ps):
+                continue
+            bindings = _bindings(shaderdb, ps[shader])
+            textures = table(binding)
+            if 'texture_maskMap' not in bindings or textures is None:
+                continue
+            text = _disassemble(shaderdb, ps[shader])
+            if text is None:
+                return None
+            scales, heights, weights = read_compositing(text, bindings['texture_maskMap'])
+            masked = layers[1:] if layers[0] == base else layers
+            for position, registers in weights.items():
+                at = position - 1
+                layer = layers[0] if position == 0 else masked[at] if at < len(masked) else None
+                paths = [textures[r] for r in sorted(registers) if r in textures]
+                if layer is None or not paths:
+                    continue
+                entry = found.setdefault(layer, {'paths': [], 'scales': [], 'height': None})
+                entry['paths'] += [path for path in paths if path not in entry['paths']]
+                entry['scales'] += [scales[r] for r in registers if r in scales]
+                height = heights.get(at) if position else None
+                if height and not entry['height'] and height[0] in textures:
+                    entry['height'] = {'path': textures[height[0]], 'channel': height[1], 'contrast': height[2]}
+    if not found:
+        return None
+    return {layer: {'paths': entry['paths'], 'height': entry['height'],
+                    'scale': max(set(entry['scales']), key=entry['scales'].count) if entry['scales'] else None}
+            for layer, entry in found.items()}
+
+
+def _shader_database(data):
+    """A shader database's links: (pixel shader offsets, {name hash: [record numbers]}, solution(record) ->
+    (pixel shader, binding object), table(binding object) -> {slot: texture path} or None), or None.
+
+    Layout: u32 binding object count at 0x18, then the objects (each starts with its u64 size); the compiled
+    shaders (DXBC, each after a 16-byte hash and its size); u32 solution count 20 bytes after the last shader, then
+    the 144-byte solutions; u32 count again, then the 32-byte permutation records."""
+    import re
+    try:
+        count = struct.unpack_from('<I', data, 0x18)[0]
+        objects, at = [], 0x1c
+        for _ in range(count):
+            size = struct.unpack_from('<Q', data, at)[0]
+            if size < 16 or at + size > len(data):
+                return None
+            objects.append((at, at + size))
+            at += size
+        shaders = list(_dxbc_shaders(data))
+        if not shaders:
+            return None
+        end = shaders[-1] + struct.unpack_from('<I', data, shaders[-1] + 24)[0]
+        total = struct.unpack_from('<I', data, end + 20)[0]
+        start = end + 24
+        records_at = start + 144 * total + 4
+        if records_at + 32 * total > len(data) or struct.unpack_from('<I', data, records_at - 4)[0] != total:
+            return None
+    except struct.error:
+        return None
+    ps = [at for at in shaders if _stage(data, at) == 0]
+    records = {}
+    for i in range(total):
+        records.setdefault(struct.unpack_from('<I', data, records_at + 32 * i)[0], []).append(i)
+
+    def solution(record):
+        at = start + 144 * record
+        return struct.unpack_from('<Q', data, at + 32)[0], struct.unpack_from('<Q', data, at + 72)[0]
+
+    def table(binding):
+        if binding >= len(objects):
+            return None
+        lo, hi = objects[binding]
+        out = {}
+        for m in re.finditer(rb'[A-Za-z_]+/[\x21-\x7e]{3,140}', data[lo:hi]):
+            if m.start() >= 8:
+                out[struct.unpack_from('<I', data, lo + m.start() - 8)[0]] = m.group().decode('ascii')
+        return out
+    return ps, records, solution, table
+
+
+def _stage(data, at):
+    """A DXBC shader's stage from its program chunk (0 pixel, 1 vertex, ...), or None."""
+    try:
+        count = struct.unpack_from('<I', data, at + 28)[0]
+        for i in range(min(count, 16)):
+            chunk = at + struct.unpack_from('<I', data, at + 32 + 4 * i)[0]
+            if data[chunk:chunk + 4] in (b'SHEX', b'SHDR'):
+                return struct.unpack_from('<I', data, chunk + 8)[0] >> 16
+    except struct.error:
+        pass
+    return None
+
+
 def _texture_tables(shaderdb):
     """The shader database's texture tables by their slots: {frozenset(slots): {slot: path}}, the commonest
     table for each set of slots."""

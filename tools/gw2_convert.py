@@ -7,7 +7,7 @@ import numpy as np
 from convert import decals_on, Archive, Converter, matrix, read_attr, write_mesh, write_skin, skin_attrs, png
 from gw2_terrain import (terrain_tree, tile_heights, height_section, mask_pages, tile_masks, layer_textures,
                          colour_pages, tile_colour,
-                         compositing_layers, texture_role, scatter_meshes, scatter_weights)
+                         compositing_layers, combination_layers, texture_role, scatter_meshes, scatter_weights)
 from gw2_groups import group_instances, gw1_part_poses
 import environment
 import gw2_physics
@@ -428,12 +428,15 @@ class Gw2Converter(Converter):
         Layer numbers come from the terrain's compiled shader names (<terrain>__0md_1md__3d__0 combines layers 0
         and 1), their textures from the level's shader database, and the painted coverage from the mask pages."""
         name = (terrain[1].get('Name') or '').lower()
-        indices = set()
+        indices, combinations = set(), {}
         for doc_name, (asset, _) in self.archive.documents.items():
             if asset.get('root_type') == 'ShaderGraph' and name and doc_name.startswith(name + '__'):
                 parts = doc_name[len(name) + 2:].split('__')
                 if len(parts) >= 2 and parts[1] in ('2d', '3d'):
-                    indices.update(int(token[:-2]) for token in parts[0].split('_') if token[:-2].isdigit())
+                    layers = [int(token[:-2]) for token in parts[0].split('_') if token[:-2].isdigit()]
+                    indices.update(layers)
+                    if parts[1] == '2d' and layers:
+                        combinations[doc_name] = layers
         if len(indices) < 2 or not pages:
             return None
         # Shader databases all have resource id 0, so look them up by type.
@@ -448,6 +451,11 @@ class Gw2Converter(Converter):
             # shader disassembler, fall back to the texture table that lists every layer (Garden Warfare 2).
             drawn = compositing_layers(data, len(indices))
             if drawn is None:
+                # No shader draws every layer: put the layers together from each combination's shader.
+                found = combination_layers(data, combinations)
+                if found and min(indices) in found and len(found) > 1:
+                    drawn = [found.get(index) for index in sorted(indices)]
+            if drawn is None:
                 groups = layer_textures(data, len(indices))
                 drawn = groups and [{'paths': paths} for paths in groups]
             if drawn:
@@ -456,6 +464,8 @@ class Gw2Converter(Converter):
             return None
         layers = []
         for index, layer_drawn in zip(sorted(indices), drawn):
+            if layer_drawn is None:
+                continue  # no combination paints this layer with a texture (it only carries grass, say)
             roles, colour = {}, None
             for path in layer_drawn['paths']:
                 found = self.archive.documents.get(path.lower())
